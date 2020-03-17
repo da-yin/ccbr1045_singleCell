@@ -1,0 +1,6 @@
+Processed data source: 
+
+- SOD1_Microglia_DEGs.csv: SODG93A endstage versus nontransgenic day 130 for ALS (Chiu et al., 2013)
+- tableS3_Holtman2015_microglia_aging.csv: Holtman, I. R. et al. Induction of a common microglia gene expression
+signature by aging ..... Acta Neuropathol. Commun. 3, 31 (2015).
+- suppData3_KerenShaul2017_DAM.csv Keren-Shaul Cell (2017)
