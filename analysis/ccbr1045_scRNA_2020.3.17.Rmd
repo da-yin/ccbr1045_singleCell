@@ -1,0 +1,1628 @@
+---
+title: "ccbr1045"
+author: "Da"
+date: "3/3/2020"
+output: html_document
+---
+
+Folder structure
+-----------
+
+```
+.
+├── rawData                  # merged seurat object from /data/CCBR/projects/ccbr1045/scrna_guohao2/SingleR_testing
+│                            #  
+├── analysis                 # analysis folder that contains script and results
+│   ├── processedData        # MicrogliaReshape.rds and DEG from published neurodegenerative disease DE analysis
+│   ├── results              # Intermediate result files
+|       ├── UMAPs            # umap of all cells/microglia 
+|       ├── networkss        # plots from Cluserprofiler cnetplot and emaplot pathways and their connected genes.
+|       ├── heatmap          # normalzed/average expression for up and down-regulated genes
+|       ├── FeaturePlots     # expression of genes projected onto umap
+|       ├── microgliaMarker  # markers for each microglia subcluster
+|       ├── microgliaCluster # Differential expression between samples for each cluster
+|       ├── microglia_Arf1_vs# Differential expression between samples for all microglia
+|       ├── microgliaCluster5# Analysis for cluster5
+│   ├── *.Rmd                # R scripts 
+│   ├── *.html               # Rmarkdown html knit file (run Rmd to get html)
+├── reports                  # ppt
+├── ref                      # methods and references
+├── readme.md                # analysis summary                       
+└── ...
+```
+
+Processed data source: 
+
+- SOD1_Microglia_DEGs.csv: SODG93A endstage versus nontransgenic day 130 for ALS (Chiu et al., 2013)
+- tableS3_Holtman2015_microglia_aging.csv: Holtman, I. R. et al. Induction of a common microglia gene expression
+signature by aging ..... Acta Neuropathol. Commun. 3, 31 (2015).
+- suppData3_KerenShaul2017_DAM.csv Keren-Shaul Cell (2017)
+
+
+
+
+The four conditions are as follows:
+WT: No disease
+Arf_KO: disease
+Ifng_KO: No disease
+Arf_KO/Ifng_KO: No disease
+
+
+
+- UMAP cluster the cells and remove non-microglia cells
+- Rescale and transform the microglia cells
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(farver)
+library(cowplot)
+library(BiocGenerics)
+library(S4Vectors)
+library(MAST)
+library(dplyr)
+library(tidyverse)
+library(ggrepel)
+library(pheatmap)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(stringr)
+library(filesstrings)
+library(png)
+library(clusterProfiler.dplyr)
+library(DT)
+library(forcats)
+library(readr)
+library(data.table)
+theme_set(theme_classic())
+```
+
+#### function to shorten the axis label for ggplots. (Some of the pathway names are very long...)
+```{r}
+#' Truncate string vector of ggplot axis label
+#'
+#' @param label    a ordered string vector
+#' @param maxLen   max length of character (nchar) to show in label
+#' @param maxWord  max count of words allowed to show in label
+#' @param pattern  Word separater
+#' @param dot      If true, three dots will added to truncated label
+#'
+#' @return a vector of truncated strings
+#' @export
+#'
+#' @examples
+short_label <- function(label, maxLen = 50, maxWord = 10, pattern = " ", dot = TRUE){
+  l <- strsplit(label, pattern)
+  short_label <- vector("character",length(l))
+  
+  for (i in seq_along(l)){
+    truncated <- FALSE
+    s <- l[[i]]
+    if (length(s) > maxWord){
+      ll <- paste(s[1:maxWord], collapse = " ")
+      truncated <- TRUE
+    }
+    else{
+      ll <- paste(s, collapse = " ")
+    }
+    
+    if (nchar(ll) > maxLen){
+      ll <- substr(ll, 1, maxLen)
+      truncated <- TRUE
+    }
+    
+    if (dot & truncated) ll <- paste(ll, "...",sep = " ")
+    
+    short_label[[i]] <- ll
+  }
+  attr(short_label, "pos") <- attr(label,"pos")
+  return(short_label)
+}
+```
+
+#### y_x.rds_1.2_tabulaMuris2020.3.4.rds is the four sample merged seurat object with added tabula Muris cell identity annotation
+```{r}
+setwd("~/Desktop/active_projects/ccbr1045_singleCell/analysis/") 
+#original data source: biowulf /data/CCBR/projects/ccbr1045/scrna_guohao2/SingleR_testing/y_x.rds_1.2_tabulaMuris2020.3.4.rds
+y_x.rds_1.2 = readRDS("~/Desktop/active_projects/seuratObject/y_x.rds_1.2_tabulaMuris2020.3.4.rds")
+#original data source: biowulf /data/CCBR/projects/ccbr1045/scrna_guohao2/integration/merged/y-x/microgliaReshape.rds
+microgliaReshape = readRDS("~/Desktop/active_projects/seuratObject/microgliaReshape.rds")
+```
+
+
+#### Find out cell identity in the merged sample
+```{r}
+DimPlot(y_x.rds_1.2, reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,group.by="tabulaMuris")+ NoLegend()
+```
+
+
+#### The composition of different cell identities. Microglia accounts for more than half.
+```{r}
+df_tabulaMuris = as.data.frame(table(y_x.rds_1.2@meta.data$tabulaMuris))
+microglia_tabulaMuris = y_x.rds_1.2@meta.data[which(y_x.rds_1.2@meta.data$tabulaMuris=="microglial cell"),]
+colnames(df_tabulaMuris)[1] = "identity"
+colnames(df_tabulaMuris)[2] = "number"
+#Create a pie chart to show the relative proportion of each cell identity
+mybar = ggplot(df_tabulaMuris, aes(x = 1, y = number, fill= identity)) + geom_bar(stat = "identity") 
+mybar + coord_polar(theta = "y")+
+    theme(axis.ticks=element_blank(),  # the axis ticks
+          axis.title=element_blank(),  # the axis labels
+          axis.text.y=element_blank()) # the 0.75, 1.00, 1.25 labels.
+
+
+```
+
+#### Breakdown of each cell identities for each sample. Arf1 seems to have a very high proportion of oligodendrocytes
+```{r}
+y_long = as.data.frame(table(y_x.rds_1.2$tabulaMuris, y_x.rds_1.2$Sample))
+y_wide = spread(y_long, Var2, Freq)
+names(y_wide)[1]="cell identity"
+y_wide
+```
+
+
+#### The total number of cells annotated as microglia by mouseRNAseq_main is, as a comparison to Tabula Muris:
+```{r}
+df_mouseRNAseq_main = as.data.frame(table(y_x.rds_1.2@meta.data$mouseRNAseq_main))
+microglia_mouseRNAseq_main = y_x.rds_1.2@meta.data[which(y_x.rds_1.2@meta.data$mouseRNAseq_main=="Microglia"),]
+df_mouseRNAseq_main
+sum(df_mouseRNAseq_main$Freq)
+# Check for concordence between two annotation databases. The overlap are:
+length(intersect(rownames(microglia_mouseRNAseq_main), rownames(microglia_tabulaMuris)))
+```
+
+
+#### create umap plot for four samples.
+```{r umap_tabulaMuris}
+dir.create("results/umaps")
+umap_tabulaMuris = 
+DimPlot(y_x.rds_1.2, reduction= "umap", split.by = 'Sample',label = TRUE,repel=TRUE,na.value=TRUE,group.by="tabulaMuris",ncol=2)+ NoLegend()
+pdf("results/umaps/umap_tabulaMuris_allCellTypes.pdf")
+umap_tabulaMuris
+dev.off()
+umap_tabulaMuris
+```
+
+#### check for total number of cells in each sample.
+```{r}
+cat("The number of cells in each samples are: ")
+cat("\n")
+table(y_x.rds_1.2@meta.data$Sample)
+```
+
+#### Macrophage has second largest number of cells, so also check to see its distribution.
+```{r}
+macrophageSubset = subset(y_x.rds_1.2, cells=which(y_x.rds_1.2$tabulaMuris=="macrophage"))
+DimPlot(subset(y_x.rds_1.2, cells=which(y_x.rds_1.2$tabulaMuris=="macrophage")), reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,group.by="tabulaMuris")+ NoLegend()
+```
+
+#### The most enriched microglia genes were Olfml3, Tmem119, and Siglec-H, which were expressed at very high levels in microglia but barely detected in macrophages and monocytes (Chiu 2013 Cell Reports), so check to see their expression.
+```{r}
+FeaturePlot(macrophageSubset,features = c("Olfml3"), split.by = "Sample")
+```
+
+```{r}
+DimPlot(microgliaReshape, reduction = "umap", group.by = "new_clusters",split.by = "SampleName", label = T, repel = T, ncol = 2) +NoLegend()
+
+```
+
+
+#### Number of microglia cells in each cluster split by sample
+```{r}
+df_microgliaReshape =
+as.data.frame(table(microgliaReshape$new_clusters, microgliaReshape$SampleName))
+
+df_microgliaReshape_wide = spread(df_microgliaReshape, Var2, Freq)
+colnames(df_microgliaReshape_wide)[1]= "microglia_cluster"
+df_microgliaReshape_wide$microglia_cluster = as.character(df_microgliaReshape_wide$microglia_cluster)
+df_microgliaReshape_wide[nrow(df_microgliaReshape_wide)+1,]=c("total", colSums(df_microgliaReshape_wide[2:ncol(df_microgliaReshape_wide)]))
+View(df_microgliaReshape_wide)
+
+```
+
+#### Find out the percentage of microglia in each subcluster for each sample after normalizing for total cell counts in each sample.
+```{r}
+df_microgliaReshape =
+as.data.frame(table(microgliaReshape$new_clusters, microgliaReshape$SampleName))
+colnames(df_microgliaReshape)[1] = "cluster"
+colnames(df_microgliaReshape)[2] = "Sample"
+
+df_microgliaReshape_wide = spread(df_microgliaReshape, Sample, Freq)
+#df_microgliaReshape_wide$total = rowSums(df_microgliaReshape_wide[,2:5])
+rownames(df_microgliaReshape_wide) = df_microgliaReshape_wide$cluster
+
+
+# normalize cluster cell numbers by total cell numbers by each sample
+df_microgliaReshape_wide$Arf1_IFNg_KO=round(df_microgliaReshape_wide$Arf1_IFNg_KO*10000/sum(df_microgliaReshape_wide$Arf1_IFNg_KO))
+df_microgliaReshape_wide$Arf1_KO=round(df_microgliaReshape_wide$Arf1_KO*10000/sum(df_microgliaReshape_wide$Arf1_KO))
+df_microgliaReshape_wide$IFNg_KO=round(df_microgliaReshape_wide$IFNg_KO*10000/sum(df_microgliaReshape_wide$IFNg_KO))
+df_microgliaReshape_wide$WT=round(df_microgliaReshape_wide$WT*10000/sum(df_microgliaReshape_wide$WT))
+
+
+df_microgliaReshape_wide = data.matrix(df_microgliaReshape_wide[,2:5])
+swept = sweep(df_microgliaReshape_wide,1,rowSums(df_microgliaReshape_wide),`/`)
+swept = data.frame(swept)
+swept$cluster = as.numeric(rownames(swept))
+
+swept_long = melt(swept, id.vars=c("cluster"))
+colnames(swept_long) = c("cluster","Sample","ratio")
+
+ 
+ggplot(swept_long, aes(x = as.factor(cluster), y = ratio, fill=Sample)) + geom_bar(position = "dodge", stat = "identity", width = 0.5) + theme(legend.position="top") + xlab("cluster") + theme(axis.text.x = element_text(face="bold"))
+```
+
+#### use ridge plot to view expression of a gene across clusters
+```{r}
+# Now start using new_clusters grouping instead of seurat_clusters
+Idents(microgliaReshape) = "new_clusters"
+RidgePlot(microgliaReshape, features = c("Apoe"), group.by = "new_clusters")
+```
+
+#### use VlnPlot to view expression of a gene across clusters. Ridge and Vln plots are easy to generate with Seurat functions, but hard to customize. So next will extraction expression matrix and develop ggplot for visulizing expression across samples/clusters.
+```{r}
+Idents(microgliaReshape) = "new_clusters"
+VlnPlot(microgliaReshape, features = c("Spp1"), pt.size = 0.02) + NoLegend() 
+```
+
+
+#### extract the expression matrix for a paticular cluster, for a particular feature. 
+```{r}
+group.cells.cluster0 <- WhichCells(object = microgliaReshape, cells = which(microgliaReshape$seurat_clusters==0))
+group.cells.cluster0.df  <- as.data.frame(x = as.matrix(x = microgliaReshape@assays$SCT@scale.data[, group.cells.cluster0]))
+
+group.cells.cluster0.df.counts  <- as.data.frame(x = as.matrix(x = microgliaReshape@assays$SCT@counts[, group.cells.cluster0]))
+
+group.cells.cluster0.df.counts.Apoe = group.cells.cluster0.df.counts[which(rownames(group.cells.cluster0.df.counts)=="Apoe"),]
+group.cells.cluster0.df.counts.Apoe.long = melt(group.cells.cluster0.df.counts.Apoe)
+group.cells.cluster0.df.counts.Apoe.long$cluster = "cluster0"
+
+ggplot(group.cells.cluster0.df.counts.Apoe.long, aes(x = cluster, y = value)) + geom_point(stat = "identity",  size = 0.1, alpha = 0.1) + geom_jitter(size = 0.1, alpha = 0.5)
+```
+
+#### use scatter plot to visulize expression for any gene
+```{r}
+# extract cell name and their new_clusters metadata
+df_cell2cluster = microgliaReshape@meta.data[,c("cell","new_clusters")]
+# extract the normalized counts for microglia cells. Note: data is normalized value, counts is raw value.
+df_normalizedCounts = as.data.frame(as.matrix(microgliaReshape@assays$SCT@data))
+
+# function to take in a gene, and generate expression scatter plots for all clusters.
+myVlnPlot = function(gene){
+  new_df_gene = df_normalizedCounts[which(rownames(df_normalizedCounts)==gene),]
+  new_df_gene_long = reshape2::melt(new_df_gene)
+  colnames(new_df_gene_long) = c("cell", "normalized_counts")
+  new_df_gene_long = merge(new_df_gene_long, df_cell2cluster, by="cell")
+
+  ggplot(new_df_gene_long, aes(x = new_clusters, y = normalized_counts, color=new_clusters)) + 
+    geom_point(stat = "identity",  size = 0.01, alpha = 0.03,
+             position=position_jitter(width=0.5, height=1)) + 
+    theme(legend.position='none') + 
+    stat_summary(fun.y = mean, fun.ymin = mean, fun.ymax = mean,
+                 geom = "crossbar", width = 1) + xlab("cluster")+
+    ylab("normalized counts") + ggtitle(gene)
+}
+```
+
+#### combine expression profile for all genes into one plot
+#### these genes are known microglia markers
+```{r}
+plot_grid(myVlnPlot("P2ry12"),myVlnPlot("Cx3cr1"),myVlnPlot("Hexb"),
+          myVlnPlot("Tmem119"),myVlnPlot("Olfml3"),myVlnPlot("Siglech"), ncol = 2)
+
+# library(grid)
+# p1 = myVlnPlot("P2ry12")
+# p2 = myVlnPlot("Apoe")
+# grid.newpage()
+# grid.draw(rbind(ggplotGrob(p1), ggplotGrob(p2), size="last"))
+```
+
+
+#### these genes are know neurodegenerative disease risk factors.
+```{r}
+plot_grid(myVlnPlot("Apoe"),myVlnPlot("Cd63"),myVlnPlot("Cxcl2"),myVlnPlot("Cd52"),
+          myVlnPlot("Ctsb"),myVlnPlot("H2-D1"),myVlnPlot("Fth1"),myVlnPlot("Spp1"), ncol = 3)
+```
+
+
+#### the function to view expression of gene in selected clusters
+```{r}
+myCounts = function(cluster.number, cluster.name, gene.name){
+  group = WhichCells(object = microgliaReshape, cells = which(microgliaReshape$seurat_clusters==cluster.number))
+  group.df = as.data.frame(x = as.matrix(x = microgliaReshape@assays$SCT@data[, group]))
+  group.df.gene = group.df[which(rownames(group.df)==gene.name),]
+  group.df.gene.long = melt(group.df.gene)
+  group.df.gene.long$cluster = cluster.name
+  group.df.gene.long$cluster.no = as.numeric(cluster.number)
+  return(group.df.gene.long)
+}
+
+cluster0.Apoe = myCounts(cluster.number = 0,cluster.name = "cluster0",gene.name = "Apoe")
+cluster1.Apoe = myCounts(cluster.number = 1,cluster.name = "cluster1",gene.name = "Apoe")
+cluster2.Apoe = myCounts(cluster.number = 2,cluster.name = "cluster2",gene.name = "Apoe")
+cluster3.Apoe = myCounts(cluster.number = 3,cluster.name = "cluster3",gene.name = "Apoe")
+cluster5.Apoe = myCounts(cluster.number = 5,cluster.name = "cluster5",gene.name = "Apoe")
+
+cluster.main.Apoe = rbind(cluster0.Apoe,cluster1.Apoe,cluster2.Apoe,cluster3.Apoe,cluster5.Apoe)
+
+p1 =
+ggplot(cluster.main.Apoe, aes(x = cluster, y = value, color=cluster)) + 
+  geom_point(stat = "identity",  size = 0.1, alpha = 0.2,
+             position=position_jitter(width=0.5, height=1)) + 
+  theme(legend.position='none') + 
+    stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,
+                 geom = "crossbar", width = 1)
+
+```
+
+#### Subset main microglia subclusters
+```{r}
+microglia.mainSubset = subset(microgliaReshape, cells=which(microgliaReshape$new_clusters%in%c(1,2,3,4,5)))
+DimPlot(microglia.mainSubset, reduction = "pca", label = T, repel = T, pt.size = 0.005)
+DimPlot(microgliaReshape, reduction = "umap", label = T, repel = T, pt.size = 0.001) + NoLegend()
+```
+
+##### Find out the percentage of microglia in each subcluster for each sample
+```{r}
+mm = reshape(as.data.frame(table(microglia.mainSubset$new_clusters, microglia.mainSubset$SampleName)),
+        idvar = "Var1", timevar = "Var2", direction = "wide" )
+colnames(mm)[1] = "cluster"
+mm = mm[c(1,2,3,4,5),]
+```
+
+
+#### relative proportion of cluster 1 to cluster 5 in two samples
+```{r}
+mm.nor = mm
+#These steps normalize total cell numbers
+mm.nor$Freq.Arf1_IFNg_KO=round(mm.nor$Freq.Arf1_IFNg_KO*10000/sum(mm.nor$Freq.Arf1_IFNg_KO))
+mm.nor$Freq.Arf1_KO=round(mm.nor$Freq.Arf1_KO*10000/sum(mm.nor$Freq.Arf1_KO))
+mm.nor$Freq.IFNg_KO=round(mm.nor$Freq.IFNg_KO*10000/sum(mm.nor$Freq.IFNg_KO))
+mm.nor$Freq.WT=round(mm.nor$Freq.WT*10000/sum(mm.nor$Freq.WT))
+rownames(mm.nor) = mm.nor$cluster
+mm.nor$cluster = NULL
+mm.nor.Arf1.WT = mm.nor[,c(2,4)]
+#Calcualte the percentage of each cluster
+mm.nor.Arf1.WT = mm.nor.Arf1.WT/rowSums(mm.nor.Arf1.WT)
+mm.nor.Arf1.WT$cluster = rownames(mm.nor.Arf1.WT)
+mm.nor.Arf1.WT = reshape2::melt(mm.nor.Arf1.WT)
+mm.nor.Arf1.WT$variable = gsub("Freq.","",mm.nor.Arf1.WT$variable)
+names(mm.nor.Arf1.WT)[2] = "SampleName"
+ggplot(mm.nor.Arf1.WT, aes(x=cluster, y=value, fill=SampleName, width=0.8)) + geom_bar(position = "dodge",stat = "identity", width = 0.8)+ theme(legend.position="top") + ylab("relative proportion of cells in each cluster")+ 
+  ggtitle("significantly higher proportion of cells in Arf1-KO cluster5 ")+ theme(axis.text.x = element_text(face="bold"))
+
+# ggplot(mm.nor.Arf1.WT, aes(x=cluster, y=value, group=SampleName, fill=SampleName)) + geom_point(aes(color=SampleName))+ theme(legend.position="top") + ylab("relative proportion of cells in each cluster")+ 
+#   ggtitle("significantly higher proportion of cells in Arf1-KO cluster5 ")+ theme(axis.text.x = element_text(face="bold")) + geom_line(aes(color=SampleName), size=2) + geom_bar(position = "dodge",stat = "identity", width = 0.5, alpha=0.8) 
+
+```
+
+
+#### relative proportion of cluster 1 to cluster 5 in four samples as pie chart
+```{r}
+mm.nor.bar = mm.nor
+mm.nor.bar$cluster = rownames(mm.nor.bar)
+colnames(mm.nor.bar) = gsub("Freq.","",colnames(mm.nor.bar))
+
+myPie = function(freq){
+  df = mm.nor.bar[,c("cluster", freq)]
+  pie = ggplot(df, aes(x = 1, y = df[,freq], fill= cluster)) + geom_bar(stat = "identity")
+  pie + coord_polar(theta = "y")+
+    theme(axis.ticks=element_blank(),  # the axis ticks
+          axis.title=element_blank(),  # the axis labels
+          axis.text.y=element_blank(),
+          axis.line.y.left =element_blank(),
+          axis.line = element_blank()) +
+    ggtitle(freq)
+}
+
+myPie("IFNg_KO")
+myPie("Arf1_KO")
+myPie("WT")
+
+plot_grid(myPie("WT"),myPie("IFNg_KO"), myPie("Arf1_IFNg_KO"),myPie("Arf1_KO"))
+
+```
+
+
+
+
+#### Find out the percentage of microglia in each subcluster for each sample
+```{r}
+tib = reshape(as.data.frame(table(microgliaReshape$new_clusters, microgliaReshape$SampleName)),
+        idvar = "Var1", timevar = "Var2", direction = "wide" )
+colnames(tib)[1] = "cluster"
+tib
+```
+
+#### Use chi-squared test to find out under and over representation of each cluster in Arf1 - WT
+```{r}
+#convert the microglia cell table from long format to wide format
+tib = reshape(as.data.frame(table(microgliaReshape$new_clusters, microgliaReshape$SampleName)),
+        idvar = "Var1", timevar = "Var2", direction = "wide" )
+colnames(tib)[1] = "cluster"
+tibmat = tib
+tibmat = data.matrix(tibmat[,2:5])
+c1 = as.table(rbind(c(tibmat[1,2], sum(tibmat[,2])-tibmat[1,2]), 
+                    c(tibmat[1,4], sum(tibmat[,4])-tibmat[1,4])))
+
+#construct the tables for chi-square test
+#Test wether a given cluster is significantly different from other clusters in the number of cells
+Arf1_WT_chi.sq = list()
+for (n in 1:12){ 
+ Arf1_WT_chi.sq[[n]] = as.table(rbind(c(tibmat[n,2], tibmat[n,4]), 
+                    c(sum(tibmat[,2])-tibmat[n,2], sum(tibmat[,4])-tibmat[n,4])))
+}
+
+Arf1_IFNg_chi.sq = list()
+for (n in 1:12){
+ Arf1_IFNg_chi.sq[[n]] = as.table(rbind(c(tibmat[n,2], tibmat[n,3]), 
+                    c(sum(tibmat[,2])-tibmat[n,2], sum(tibmat[,3])-tibmat[n,3])))
+}
+
+Arf1_Arf1_IFNg_chi.sq = list()
+for (n in 1:12){
+ Arf1_Arf1_IFNg_chi.sq[[n]] = as.table(rbind(c(tibmat[n,2], tibmat[n,1]), 
+                    c(sum(tibmat[,2])-tibmat[n,2], sum(tibmat[,1])-tibmat[n,1])))
+}
+
+#Apply chi-square test
+Arf1_WT_chi.sq_res = lapply(Arf1_WT_chi.sq, function(x) {
+  chisq.test(x)
+})
+
+Arf1_IFNg_chi.sq_res = lapply(Arf1_IFNg_chi.sq, function(x) {
+  chisq.test(x)
+})
+
+Arf1_Arf1_IFNg_chi.sq_res = lapply(Arf1_Arf1_IFNg_chi.sq, function(x) {
+  chisq.test(x)
+})
+# Get the p values from test statistics
+Arf1_WT_chi.sq_res_Pvalue = list()
+for (n in 1:12){
+  Arf1_WT_chi.sq_res_Pvalue[[n]] = Arf1_WT_chi.sq_res[[n]]$p.value
+}
+
+Arf1_IFNg_chi.sq_res_Pvalue = list()
+for (n in 1:12){
+  Arf1_IFNg_chi.sq_res_Pvalue[[n]] = Arf1_IFNg_chi.sq_res[[n]]$p.value
+}
+
+Arf1_Arf1_IFNg_chi.sq_res_Pvalue = list()
+for (n in 1:12){
+  Arf1_Arf1_IFNg_chi.sq_res_Pvalue[[n]] = Arf1_Arf1_IFNg_chi.sq_res[[n]]$p.value
+}
+
+#construct the p values into a table for presentation
+myChisq = cbind(matrix(unlist(Arf1_WT_chi.sq_res_Pvalue)),matrix(unlist(Arf1_IFNg_chi.sq_res_Pvalue)),matrix(unlist(Arf1_Arf1_IFNg_chi.sq_res_Pvalue)))
+
+nrow(myChisq)
+rownames(myChisq) = c("cluster1","cluster2","cluster3","cluster4","cluster5","cluster6",
+                      "cluster7","cluster8","cluster9","cluster10","cluster11","cluster12")
+
+colnames(myChisq) = c("Arf1_WT", "Arf1_IFNg","Arf1_Arf1_IFNg")
+myChisq = as.data.frame(myChisq)
+myChisq$Arf1_WT_sig = ifelse(myChisq$Arf1_WT < 0.05, "sig","ns")
+myChisq$Arf1_all_sig = ifelse(myChisq$Arf1_WT < 0.05&myChisq$Arf1_IFNg< 0.05&myChisq$Arf1_Arf1_IFNg<0.05, "sig","ns")
+myChisq
+
+#library(DT) #for interactive visulization of table
+#datatable(myChisq)
+
+```
+
+
+#### create volcano plots for sample level deg
+```{r}
+#function to take in a deg table and create a volcano at sample level
+myVolcano = function(file,contrast, dir){
+  deg = read.table(paste0("results/", dir,"/", file), header = T, stringsAsFactors = F)
+  deg$p_val_adj = ifelse(deg$p_val_adj==0, 5e-324, deg$p_val_adj)
+  deg.sig = deg[which(deg$p_val_adj<0.05),]
+  deg$significance = ifelse(deg$p_val_adj<0.05&abs(deg$avg_logFC)>0.2, "sig", "ns")
+  deg$gene = rownames(deg)
+  volcanoPlot =
+    ggplot(deg, aes(x=avg_logFC, y=-log(p_val_adj, 10))) +
+    geom_point(colour = ifelse(deg$significance=="sig", "red", "black"), size = 0.8, alpha=0.5) +
+    ggtitle(contrast) +
+    xlab("log2 FC") +
+    ylab("-log10 adjusted p-value") +
+    geom_text_repel(size = 3,aes(label= ifelse(deg$significance=="sig",gene,""),colour = "red",fontface="bold"))+
+    #geom_text_repel(size = 2.5,aes(label= ifelse(p_val_adj<0.01,gene,""),colour = "red",fontface="bold")) +
+    theme_classic() +
+    theme(legend.position = "none")+ xlim(-1,1) + ylim(0,350)
+    pdf(paste0("results/", dir, "/", contrast, "_volcano",".pdf"))
+    print(volcanoPlot)
+    dev.off()
+}
+```
+
+```{r}
+myVolcano(file = "Arf1_WT_degs.txt", dir = "microglia_Arf1_vs_WT", contrast = "Arf1-WT")
+myVolcano(file = "IFNg_WT_degs.txt", dir = "microglia_IFNg_vs_WT", contrast = "IFNg-WT")
+myVolcano(file = "Arf1_IFNg_WT_degs.txt", dir = "microglia_Arf1_IFNg_vs_WT", contrast = "Arf1_IFNg-WT")
+myVolcano(file = "Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_IFNg", contrast = "Arf1-IFNg")
+myVolcano(file = "Arf1_Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_Arf1_IFNg", contrast = "Arf1-Arf1_IFNg")
+```
+
+## comparing top markers in this study to those found in other neurodegenerative diseases studies using Signed value
+#### Signed.value = sign(logFC) * log10(Pvalue) * abs(logFC) * -1
+
+#### Arf1-WT with published RNA-Seq data of microglia in ALS 
+```{r}
+Arf1_WT_s2s = read.table("~/Desktop/active_projects/ccbr1045_singleCell/analysis/results/microglia_Arf1_vs_WT/Arf1_WT_degs.txt", stringsAsFactors = F)
+Arf1_WT_s2s$gene = rownames(Arf1_WT_s2s)
+Arf1_WT_s2s$p_val=ifelse(Arf1_WT_s2s$p_val==0, 8.402512e-306, Arf1_WT_s2s$p_val)
+Arf1_WT_s2s$Arf1_WT.signed.value = sign(Arf1_WT_s2s$avg_logFC)*log10(Arf1_WT_s2s$p_val)*abs(Arf1_WT_s2s$avg_logFC)*-1
+
+ALS = read.csv("~/Desktop/active_projects/ccbr1045_singleCell/analysis/processedData/SOD1_Microglia_DEGs.csv", stringsAsFactors = F)
+commonGenes = intersect(Arf1_WT_s2s$gene, ALS$Official.Symbol)
+Arf1_WT_select = Arf1_WT_s2s[which(Arf1_WT_s2s$gene%in%commonGenes),]
+ALS_select = ALS[which(ALS$Official.Symbol%in%commonGenes),]
+# Arf1_WT_select$p_val=ifelse(Arf1_WT_select$p_val==0, 8.402512e-306, Arf1_WT_select$p_val)
+# Arf1_WT_select$Arf1_WT.signed.value = sign(Arf1_WT_select$avg_logFC)*log10(Arf1_WT_select$p_val)*abs(Arf1_WT_select$avg_logFC)*-0.1
+ALS_select$ALS.signed.value = log10(ALS_select$P.value) * log2(ALS_select$Fold.change.Mutant.Control) * -1
+colnames(ALS_select)[2]="gene"
+Arf1_WT_ALS.merged = merge(Arf1_WT_select, ALS_select, by="gene")
+Arf1_WT_ALS.merged = Arf1_WT_ALS.merged[,c("gene","Arf1_WT.signed.value","ALS.signed.value")]
+
+plot_ALS = 
+ggplot(Arf1_WT_ALS.merged, aes(x = Arf1_WT.signed.value,y = ALS.signed.value)) + geom_point(alpha=0.5)+
+         geom_vline(xintercept = 0, linetype="dashed", color = "red")+
+         geom_hline(yintercept = 0, linetype="dashed", color = "red")+
+    theme(legend.position = "none", axis.text.x = element_text(size = 10),
+          axis.text.y = element_text(size=10))+
+  geom_text_repel(size=4.5, aes(label= ifelse(abs(Arf1_WT.signed.value)>15&abs(ALS.signed.value)>2, gene,""),colour = "red",fontface="bold"))
+print(plot_ALS)
+
+ggsave(filename = "results/microglia_Arf1_vs_WT/Arf1_WT_ALS_signed.value.pdf", plot = plot_ALS)
+write.table(Arf1_WT_ALS.merged, "results/microglia_Arf1_vs_WT/Arf1_WT_ALS_signed.value.txt", quote = F, row.names = F, sep = '\t')
+
+```
+
+#### comparing top markers in Arf1-WT to aging markers
+```{r}
+################aging############################
+aging = read.csv("~/Desktop/active_projects/ccbr1045_singleCell/analysis/processedData/tableS3_Holtman2015_microglia_aging.csv", stringsAsFactors = F)
+require("biomaRt")
+human = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mouse = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+genesV2 = getLDS(attributes = c("hgnc_symbol"), filters = "hgnc_symbol", values = aging$X , mart = human, attributesL = c("mgi_symbol"), martL = mouse, uniqueRows=T)
+genesV2 = genesV2[!duplicated(genesV2$HGNC.symbol),]
+colnames(aging)[1] = "HGNC.symbol"
+aging = merge(aging, genesV2, by="HGNC.symbol")
+aging = aging[,c("HGNC.symbol","AGED_logFC","AGED_FDR_p","MGI.symbol")]
+aging$aging.signed.value = aging$AGED_logFC * log10(aging$AGED_FDR_p) * -1
+colnames(aging)[4] = "gene"
+aging = aging[which(aging$gene%in%intersect(aging$gene, Arf1_WT_s2s$gene)),]
+Arf1_WT_select = Arf1_WT_s2s[which(Arf1_WT_s2s$gene%in%intersect(aging$gene, Arf1_WT_s2s$gene)),]
+Arf1_WT_aging.merged = merge(Arf1_WT_select, aging, by="gene")
+Arf1_WT_aging.merged = Arf1_WT_aging.merged[,c("gene","Arf1_WT.signed.value","aging.signed.value")]
+
+plot_aging = 
+ggplot(Arf1_WT_aging.merged, aes(x = Arf1_WT.signed.value,y = aging.signed.value)) + geom_point(alpha=0.5)+
+         geom_vline(xintercept = 0, linetype="dashed", color = "red")+
+         geom_hline(yintercept = 0, linetype="dashed", color = "red")+
+    theme(legend.position = "none", axis.text.x = element_text(size = 10),
+          axis.text.y = element_text(size=10))+
+  geom_text_repel(size=4.5, aes(label= ifelse(abs(Arf1_WT.signed.value)>1.5&abs(aging.signed.value)>1.5, gene,""),colour = "red",fontface="bold"))
+
+print(plot_aging)
+
+ggsave(filename = "results/microglia_Arf1_vs_WT/Arf1_WT_aging_signed.value.pdf", plot = plot_aging)
+write.table(Arf1_WT_aging.merged, "results/microglia_Arf1_vs_WT/Arf1_WT_aging_signed.value.txt", quote = F, row.names = F, sep = '\t')
+```
+
+
+
+#### comparing top markers in Arf1-WT to Alzheimer’s Disease deg markers
+```{r}
+################DAM############################
+# data source: A Unique Microglia Type Associated with Restricting Development of Alzheimer’s Disease, Keren-Shaul et.al 2017
+DAM = read.csv("~/Desktop/active_projects/ccbr1045_singleCell/analysis/processedData/suppData3_KerenShaul2017_DAM.csv", stringsAsFactors = F)
+colnames(DAM) = c("gene", "counts", "FC_DAM_homeostatic.microglia", "log10Pvalue", "FDR")
+DAM = DAM[!is.na(DAM$FC_DAM_homeostatic.microglia),]
+DAM$DAM.signed.value = sign(DAM$FC_DAM_homeostatic.microglia) * log2(abs(DAM$FC_DAM_homeostatic.microglia)) * DAM$log10Pvalue 
+DAM = DAM[,c(1,3,4,5,6)]
+
+
+DAM = DAM[which(DAM$gene%in%intersect(DAM$gene, Arf1_WT_s2s$gene)),]
+Arf1_WT_select = Arf1_WT_s2s[which(Arf1_WT_s2s$gene%in%intersect(DAM$gene, Arf1_WT_s2s$gene)),]
+Arf1_WT_DAM.merged = merge(Arf1_WT_select, DAM, by="gene")
+Arf1_WT_DAM.merged = Arf1_WT_DAM.merged[,c("gene","Arf1_WT.signed.value","DAM.signed.value")]
+
+plot_DAM=
+  ggplot(Arf1_WT_DAM.merged, aes(x = Arf1_WT.signed.value,y = DAM.signed.value)) + geom_point(alpha=0.5)+
+         geom_vline(xintercept = 0, linetype="dashed", color = "red")+
+         geom_hline(yintercept = 0, linetype="dashed", color = "red")+
+    theme(legend.position = "none", axis.text.x = element_text(size = 10),
+          axis.text.y = element_text(size=10))+
+  geom_text_repel(size=4.5, aes(label= ifelse(abs(Arf1_WT.signed.value)>2.5&abs(DAM.signed.value)>10, gene,""),colour = "red",fontface="bold"))
+
+print(plot_DAM)
+ggsave(filename = "results/microglia_Arf1_vs_WT/Arf1_WT_DAM_signed.value.pdf", plot =plot_DAM)
+
+write.table(Arf1_WT_DAM.merged, "results/microglia_Arf1_vs_WT/Arf1_WT_DAM_signed.value.txt", quote = F, row.names = F, sep = '\t')
+```
+
+#### Since cluster 5 is enriched in the Arf1 sample vs other, test ORA on the cluster5 DEGs
+```{r}
+microgliaReshape.markers = read.table("results/microgliaMarker/microgliaReshape.markers_for.each.cluster.txt", header = T, stringsAsFactors = F)
+
+```
+
+#### comparing top markers in Arf1-WT to Alzheimer’s Disease deg markers
+```{r}
+
+ggsave(filename = "results/microgliaMarker/microglia.cluster5.top10.markers_DAM_signed.value.pdf",
+    ggplot(Arf1_WT_DAM.merged, aes(x = Arf1_WT.signed.value,y = DAM.signed.value)) + geom_point(alpha=0.5, color=ifelse(Arf1_WT_DAM.merged$gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene,"red", "darkgrey"))+
+         geom_vline(xintercept = 0, linetype="dashed", color = "red")+
+         geom_hline(yintercept = 0, linetype="dashed", color = "red")+
+    theme(legend.position = "none", axis.text.x = element_text(size = 10),
+          axis.text.y = element_text(size=10))+
+  geom_text_repel(size=4.5, aes(label= ifelse(gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene, gene,""),colour = "red",fontface="bold"))
+)
+```
+#### comparing top markers in Arf1-WT to ALS Disease deg markers
+
+```{r}
+ggsave(filename = "results/microgliaMarker/microglia.cluster5.top10.markers_ALS_signed.value.pdf",
+    ggplot(Arf1_WT_ALS.merged, aes(x = Arf1_WT.signed.value,y = ALS.signed.value)) + geom_point(alpha=0.5, color=ifelse(Arf1_WT_ALS.merged$gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene,"red", "darkgrey"))+
+         geom_vline(xintercept = 0, linetype="dashed", color = "red")+
+         geom_hline(yintercept = 0, linetype="dashed", color = "red")+
+    theme(legend.position = "none", axis.text.x = element_text(size = 10),
+          axis.text.y = element_text(size=10))+
+  geom_text_repel(size=4.5, aes(label= ifelse(gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene, gene,""),colour = "red",fontface="bold"))
+)
+```
+#### comparing top markers in Arf1-WT to aging deg markers
+```{r}
+ggsave(filename = "results/microgliaMarker/microglia.cluster5.top10.markers_aging_signed.value.pdf",
+    ggplot(Arf1_WT_aging.merged, aes(x = Arf1_WT.signed.value,y = aging.signed.value)) + geom_point(alpha=0.5, color=ifelse(Arf1_WT_aging.merged$gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene,"red", "darkgrey"))+
+         geom_vline(xintercept = 0, linetype="dashed", color = "red")+
+         geom_hline(yintercept = 0, linetype="dashed", color = "red")+
+    theme(legend.position = "none", axis.text.x = element_text(size = 10),
+          axis.text.y = element_text(size=10))+
+  geom_text_repel(size=4.5, aes(label= ifelse(gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene, gene,""),colour = "red",fontface="bold"))
+)
+```
+
+#### Find markers cluster5-cluster1 
+```{r}
+dir.create("results/microgliaCluster5/")
+Idents(microglia.mainSubset) = "new_clusters"
+markers.cluster5_cluster1 = 
+FindMarkers(microglia.mainSubset, ident.1=5, ident.2=1,test.use="MAST", logfc.threshold = 0.05, min.pct = 0.05)
+write.table(markers.cluster5_cluster1, "results/microgliaCluster5/degs.cluster5-cluster1.txt", quote = F,row.names = T, sep = '\t', col.names=NA)
+```
+```{r}
+markers.cluster5_cluster1 = read.table("results/microgliaCluster5/degs.cluster5-cluster1.txt",header = T)
+markers.cluster5_cluster1$gene = rownames(markers.cluster5_cluster1)
+markers.cluster5_cluster1.sig = markers.cluster5_cluster1[which(markers.cluster5_cluster1$p_val_adj<0.05&
+                                                                  abs(markers.cluster5_cluster1$avg_logFC)>0.5),]
+
+```
+#### ORA from cluster5
+```{r}
+myCluster5_cluster1_deg_ORA = enrichGO(gene = as.character(markers.cluster5_cluster1.sig$gene),universe = as.character(rownames(microgliaReshape)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.01, qvalueCutoff = 0.05)
+
+select1 = c("leukocyte migration","tumor necrosis factor production","cytokine-mediated signaling pathway","regulation of inflammatory response","leukocyte chemotaxis","response to lipopolysaccharide","regulation of leukocyte differentiation","neuron death")
+
+myCluster5_selectORA = myCluster5_cluster1_deg_ORA[which(myCluster5_cluster1_deg_ORA@result$Description%in%select1),asis=T]
+
+dotplot(myCluster5_cluster1_deg_ORA)
+dotplot(myCluster5_selectORA)
+
+lfc = markers.cluster5_cluster1.sig[,c("avg_logFC")]
+fc = 2^lfc
+names(lfc) = rownames(markers.cluster5_cluster1.sig)
+names(fc) = rownames(markers.cluster5_cluster1.sig)
+
+cnetplot(myCluster5_selectORA, categorySize="pvalue", foldChange=lfc)
+emapplot(myCluster5_selectORA)
+
+lfc = markers.cluster5_cluster1.sig[,c("avg_logFC")]
+fc = 2^lfc
+names(lfc) = rownames(markers.cluster5_cluster1.sig)
+names(fc) = rownames(markers.cluster5_cluster1.sig)
+# 
+# Arf1_WT_logfc = Arf1_WT_s2s_sig[,c("avg_logFC")]
+# Arf1_WT_fc = 2^Arf1_WT_logfc
+# names(Arf1_WT_logfc) = rownames(Arf1_WT_s2s_sig)
+# names(Arf1_WT_fc) = rownames(Arf1_WT_s2s_sig)
+# 
+# head(Arf1_WT_fc)
+# 
+# ggsave("results/networks/Arf1_WT_immune_inflamation.pdf",
+# cnetplot(immune_inflamation, categorySize="pvalue", foldChange=Arf1_WT_fc)
+# )
+
+```
+
+```{r}
+write.csv(myCluster5_cluster1_deg_ORA@result, "results/microgliaCluster5/myCluster5_cluster1_deg_ORA.csv", quote = F, row.names = F)
+```
+
+
+```{r}
+write.csv(myCluster5_ORA, "results/microgliaMarker/microglia.cluster5.markers_ORA.BP.csv", quote = F, row.names = F)
+
+myCluster5_BPselected1 = c("tumor necrosis factor production", "leukocyte migration","leukocyte chemotaxis","regulation of inflammatory response","cell killing","negative regulation of cell activation","neuron death")
+
+myCluster5_ORA_subset1 = myCluster5_ORA[which(myCluster5_ORA@result$Description%in%myCluster5_BPselected1),asis=T]
+
+dotplot(myCluster5_ORA_subset1)
+barplot(myCluster5_ORA_subset1) + theme_classic()
+cnetplot(myCluster5_ORA_subset1)
+emapplot(myCluster5_ORA_subset1)
+myCluster5_ORA_subset1 = mutate(myCluster5_ORA_subset1, richFactor = Count / as.numeric(sub("/\\d+", "", BgRatio)))
+```
+
+#### find out within WT sample, is cluster 5 also a disease gene associated cluster?
+```{r}
+disease.markers = c("Apoe", "Cd63", "Cxcl2", "Cd52", "Ctsb", "H2-D1", "Fth1", "Spp1")
+disease.markers%in%rownames(WT_cluster5_cluster1)
+disease.markers%in%rownames(Arf1_cluster5_cluster1)
+disease.markers%in%rownames(Arf1_IFNg_cluster5_cluster1)
+disease.markers%in%rownames(IFNg_cluster5_cluster1)
+
+
+
+Idents(microgliaReshape)="new_clusters"
+WT_cluster5_cluster1 = FindMarkers(microgliaReshape[, which(microgliaReshape$SampleName=="WT")], ident.1 = 5, ident.2=1, test.use = "MAST",logfc.threshold = 0.5, min.pct = 0.25)
+Arf1_cluster5_cluster1 = FindMarkers(microgliaReshape[, which(microgliaReshape$SampleName=="Arf1_KO")], ident.1 = 5, ident.2=1, test.use = "MAST",logfc.threshold = 0.5, min.pct = 0.25)
+Arf1_IFNg_cluster5_cluster1 = FindMarkers(microgliaReshape[, which(microgliaReshape$SampleName=="Arf1_IFNg_KO")], ident.1 = 5, ident.2=1, test.use = "MAST",logfc.threshold = 0.5, min.pct = 0.25)
+IFNg_cluster5_cluster1 = FindMarkers(microgliaReshape[, which(microgliaReshape$SampleName=="IFNg_KO")], ident.1 = 5, ident.2=1, test.use = "MAST",logfc.threshold = 0.5, min.pct = 0.25)
+
+
+```
+
+
+#### Sample level ORA
+
+- heatmap for inflammation DEGs in the Arf1 group compared with the other three group
+- lipid metabolic process network
+- inflammation network
+- seurat dotplot Differentially expressed genes in the lipid metabolic process – across samples
+- seurat dotplot Differentially expressed genes in inflamation – across samples
+- enrichmap for inflamation
+- enrichmap for lipid metabolic process
+
+```{r}
+#function to take in a deg table and create ORA at sample level
+myVolcano = function(file,contrast, dir){
+  deg = read.table(paste0("results/", dir,"/", file), header = T, stringsAsFactors = F)
+  deg.sig = deg[which(deg$p_val_adj<0.05),]
+  myORA = 
+  enrichGO(gene = rownames(deg_sig),universe = as.character(rownames(deg)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.05 )
+  
+
+    pdf(paste0("results/", dir, "/", contrast, "_volcano",".pdf"))
+    print(volcanoPlot)
+    dev.off()
+}
+
+Arf1_WT_s2s_sig = Arf1_WT_s2s[which(Arf1_WT_s2s$p_val_adj<0.05),]
+myArf1_WT_ORAs = 
+enrichGO(gene = rownames(Arf1_WT_s2s_sig),universe = as.character(rownames(Arf1_WT_s2s)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.05 )
+dotplot(myArf1_WT_ORAs, showCategory=20)
+library(DT)
+datatable(myArf1_WT_ORAs@result)
+
+write.csv(myArf1_WT_ORAs@result, "results/microglia_Arf1_vs_WT/Arf2_WT_ORA.csv", quote = F, row.names = F)
+
+inflamation = myArf1_WT_ORAs[which(myArf1_WT_ORAs@result$Description%in%c("regulation of inflammatory response")),asis=T]
+
+immune_inflamation = myArf1_WT_ORAs[which(myArf1_WT_ORAs@result$Description%in%c("activation of immune response","regulation of inflammatory response")),asis=T]
+
+
+
+phagocytosis_inflamation = myArf1_WT_ORAs[which(myArf1_WT_ORAs@result$Description%in%c("phagocytosis","regulation of inflammatory response")),asis=T]
+
+lipid_matabolic2 = myArf1_WT_ORAs[which(myArf1_WT_ORAs@result$Description%in%c("regulation of lipid metabolic process", "positive regulation of steroid metabolic process", "regulation of lipid biosynthetic process","negative regulation of lipid metabolic process", "lipid storage", "positive regulation of lipid localization", "lipid localization","glycolipid catabolic process","glycosphingolipid catabolic process")),asis=T]
+
+lipid_matabolic = myArf1_WT_ORAs[which(myArf1_WT_ORAs@result$Description%in%c("regulation of lipid metabolic process", "positive regulation of steroid metabolic process")),asis=T]
+
+lipid_network = myArf1_WT_ORAs[which(myArf1_WT_ORAs@result$Description%in%c("regulation of lipid metabolic process", "positive regulation of steroid metabolic process", "regulation of lipid biosynthetic process","negative regulation of lipid metabolic process", "lipid storage", "positive regulation of lipid localization", "lipid localization")),asis=T]
+
+Arf1_WT_logfc = Arf1_WT_s2s_sig[,c("avg_logFC")]
+Arf1_WT_fc = 2^Arf1_WT_logfc
+names(Arf1_WT_logfc) = rownames(Arf1_WT_s2s_sig)
+names(Arf1_WT_fc) = rownames(Arf1_WT_s2s_sig)
+
+head(Arf1_WT_fc)
+
+ggsave("results/networks/Arf1_WT_immune_inflamation.pdf",
+cnetplot(immune_inflamation, categorySize="pvalue", foldChange=Arf1_WT_fc)
+)
+
+ggsave("results/networks/Arf1_WT_lipid_matabolic.pdf",
+cnetplot(lipid_matabolic, categorySize="pvalue", foldChange=Arf1_WT_fc)
+)
+```
+
+#### inflamation
+```{r fig.height= 3, fig.width=4}
+Idents(microgliaReshape)="Sample"
+inflamation_gene = myArf1_WT_ORAs[which(myArf1_WT_ORAs$Description=="regulation of inflammatory response",), c("geneID")]
+inflamation_gene = strsplit(as.character(inflamation_gene), '\\/')
+inflamation_gene = unlist(inflamation_gene)
+
+inflamation_gene.ave = AverageExpression(microgliaReshape,features = inflamation_gene ,assays = "SCT")
+inflamation_gene.ave = inflamation_gene.ave$SCT
+inflamation_gene.ave.reg = inflamation_gene.ave
+pheatmap(data.matrix(inflamation_gene.ave),scale="row",cellwidth = 65, main = "genes in inflamation")
+inflamation_gene.ave.reg$regulation = ifelse(inflamation_gene.ave.reg$Arf1_KO.h5<inflamation_gene.ave.reg$WT.h5, "down-regulated", "up-regulated")
+inflamation_gene.ave.reg.up = inflamation_gene.ave.reg[which(inflamation_gene.ave.reg$regulation=="up-regulated"),]
+inflamation_gene.ave.reg.down = inflamation_gene.ave.reg[which(inflamation_gene.ave.reg$regulation=="down-regulated"),]
+
+ggsave(filename = "results/heatmaps/Up-regulated_genes_inflamation.pdf", 
+       plot = pheatmap(data.matrix(inflamation_gene.ave.reg.up[,1:4]),
+                       scale="row",cellwidth = 65, main = "up-regulated genes in inflamation"))
+
+ggsave(filename = "results/heatmaps/Down-regulated_genes_inflamation.pdf", 
+       plot = pheatmap(data.matrix(inflamation_gene.ave.reg.up[,1:4]),
+                       scale="row",cellwidth = 65, main = "Down-regulated genes in inflamation"))
+
+```
+
+#### function generate deg table, volcano plots for a given cluster compared to rest of clusters
+```{r}
+Idents(microgliaReshape) = "Sample"
+#myFindMarkders: for a given cluster, find out the DEGs between two samples. Create DEG table and volcano plots
+myFindMarkders = function(seuratObj, clusterNumber, identity1, identity2){
+  DEG.name = paste("cluster", clusterNumber,"_",identity1,"-", identity2, ".txt", sep = "")
+  DEG.sig.name = paste("cluster", clusterNumber,"_",identity1,"-", identity2, "_sig.txt", sep = "")
+  DEG =
+  FindMarkers(seuratObj[,which(seuratObj$seurat_clusters==clusterNumber)], ident.1=identity1, ident.2=identity2,test.use="MAST", logfc.threshold = 0.05, min.pct = 0.05) #intentionally lowered the stringency of the search in order to get more genes and their statistics
+  DEG.sig = DEG[which(DEG$p_val_adj<0.05),]
+  DEG$significance = ifelse(DEG$p_val_adj<0.05, "sig", "ns")
+  DEG$gene = rownames(DEG)
+  volcanoPlot =
+    ggplot(DEG, aes(x=avg_logFC, y=-log10(p_val_adj))) +
+    geom_point(colour = ifelse(DEG$significance=="sig", "red", "black"), size = 0.8) +
+    ggtitle(paste("cluster", clusterNumber,"_",identity1,"-", identity2, sep = "")) +
+    xlab("log2 FC") +
+    ylab("-log10 adjusted p-value") +
+    geom_text_repel(size = 2.5,aes(label= ifelse(p_val_adj<quantile(DEG.sig$p_val_adj,prob=0.1),gene,""),colour = "red",fontface="bold"))+
+    #geom_text_repel(size = 2.5,aes(label= ifelse(p_val_adj<0.01,gene,""),colour = "red",fontface="bold")) +
+    theme_bw() +
+    theme(legend.position = "none")+ xlim(-0.5,0.5) + ylim(0,100)
+  
+  write.table(DEG, DEG.name, quote = F, col.names=NA, sep = "\t")
+  write.table(DEG.sig, DEG.sig.name, quote = F, col.names=NA, sep = "\t")
+
+  png(paste("cluster", clusterNumber,"_",identity1,"-", identity2, ".png", sep = ""),  width = 4, height = 4, units = 'in', res = 300)
+  print(volcanoPlot)
+  dev.off()
+  return(volcanoPlot)
+}
+
+```
+
+```{r}
+
+myFindMarkders(seuratObj = microgliaReshape,clusterNumber=2,identity1 = "Arf1_KO.h5",identity2 = "WT.h5")
+```
+
+
+```{r}
+for (clusterNumber in 0:13){
+myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "Arf1_KO.h5",identity2 = "WT.h5")
+}
+```
+
+```{r}
+for (clusterNumber in 0:13){
+myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "Arf1_KO.h5",identity2 = "IFNg_KO.h5")
+}
+```
+
+```{r}
+for (clusterNumber in 0:13){
+myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "Arf1_KO.h5",identity2 = "Arf1_IFNg_KO.h5")
+}
+```
+
+```{r}
+for (clusterNumber in 0:13){
+myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "Arf1_IFNg_KO.h5",identity2 = "WT.h5")
+}
+```
+
+```{r}
+dir.create("results/microgliaCluster_IFNg_vs_WT/")
+for (clusterNumber in 0:13){
+myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "IFNg_KO.h5",identity2 = "WT.h5")
+}
+file.move(list.files(pattern = "cluster"), "results/microgliaCluster_IFNg_vs_WT/")
+```
+
+Reading in allArf1_KO.h5-WT.h5 volcanos to create a new plot with grid.arrange
+```{r}
+#combine all volcanos into one figure for presentation
+rl = lapply(sprintf("results/microgliaCluster_Arf1_vs_WT/cluster%i_Arf1_KO.h5-WT.h5.png", 0:13), png::readPNG)
+gl = lapply(rl, grid::rasterGrob)
+gridExtra::grid.arrange(grobs=gl)
+
+```
+
+
+
+```{r}
+#function to look into the DEG folder, find the significant genes(files), then get the gene names for searching for over-represented pathways using clusterprofiler
+get_geneList = function(dir, listName){
+  myfiles = list.files(dir, pattern = "sig")
+  listName = list()
+  for (i in myfiles){
+    listName[[i]] = read.table(paste(dir, i, sep = "/"), header = T, sep = '\t')
+    listName[[i]] = listName[[i]]$X
+  }
+  names(listName) = gsub("\\_.*","",myfiles)
+  return(listName)
+}
+```
+
+```{r}
+#function to look into the DEG folder, find the significant genes(files), then get the whole table including genes names, p values etc
+get_degTable = function(dir, listName){
+  myfiles = list.files(dir, pattern = "sig")
+  listName = list()
+  for (i in myfiles){
+    listName[[i]] = read.table(paste(dir, i, sep = "/"), header = T, sep = '\t')
+  }
+  names(listName) = gsub("\\_.*","",myfiles)
+  return(listName)
+}
+```
+
+#### scale.data contains values only for variable genes. So rescale for all genes here.
+```{r}
+#The purpose of ScaleData is so that the normalized counts for all genes can be store in the assay. 
+#Otherwise it's just the top 2000 most variable genes by default. 
+microgliaReshape = ScaleData(microgliaReshape, features = rownames(microgliaReshape))
+
+cells =c("Gh","Rbm3","Cap1","Cdc42","Bsg","Bin1","Tanc2","Tmbim6","Apod","Rpl21")
+library(viridis)
+#DoHeatmap(microgliaReshape, features = cells, group.by = "Sample", slot = "data")+ 
+DoHeatmap(microgliaReshape, features = cells, group.by = "Sample")+
+ scale_fill_distiller(palette = "RdBu")
+  #scale_fill_gradientn(colors = c("green","white", "red"))
+#scale_fill_distiller(palette = "RdGy")
+ # scale_fill_viridis()
+#scale_fill_gradientn(colors = c("blue", "white", "red"))
+```
+
+
+#### DEG for whole microglia cell population:
+```{r}
+#Compare sample to sample to find DEG using default parameters. 
+Idents(microgliaReshape) = "Sample"
+
+##### First use Arf1_KO as experiment, other samples as control
+Microglia.Markers_Arf1_WT = 
+FindMarkers(microgliaReshape,ident.1="Arf1_KO.h5",ident.2="WT.h5",test.use="MAST")
+Microglia.Markers_Arf1_WT$gene = rownames(Microglia.Markers_Arf1_WT)
+
+write.table(Microglia.Markers_Arf1_WT, "Microglia.Markers_Arf1_WT.txt", quote=F, sep="\t", col.names = NA)
+
+Microglia.Markers_Arf1_IFNg = 
+FindMarkers(microgliaReshape,ident.1="Arf1_KO.h5",ident.2="IFNg_KO.h5",test.use="MAST")
+Microglia.Markers_Arf1_IFNg$gene = rownames(Microglia.Markers_Arf1_IFNg)
+
+
+write.table(Microglia.Markers_Arf1_IFNg, "Microglia.Markers_Arf1_IFNg.txt", quote=F, sep="\t", col.names = NA)
+
+Microglia.Markers_Arf1_Arf1.IFNg = 
+FindMarkers(microgliaReshape,ident.1="Arf1_KO.h5",ident.2="Arf1_IFNg_KO.h5",test.use="MAST")
+Microglia.Markers_Arf1_Arf1.IFNg$gene = rownames(Microglia.Markers_Arf1_Arf1.IFNg)
+
+write.table(Microglia.Markers_Arf1_Arf1.IFNg, "Microglia.Markers_Arf1_Arf1.IFNg.txt", quote=F, sep="\t", col.names = NA)
+
+Microglia.Markers_Arf1_Arf1.IFNg.top = top_n(Microglia.Markers_Arf1_Arf1.IFNg, wt = p_val,n = 50)
+Microglia.Markers_Arf1_IFNg.top = top_n(Microglia.Markers_Arf1_IFNg, wt = p_val,n = 50)
+Microglia.Markers_Arf1_WT.top = top_n(Microglia.Markers_Arf1_WT, wt = p_val,n = 50)
+
+
+##### Then use all samples as experiment, WT as control
+
+Microglia.Markers_Arf1_IFNg_WT = 
+FindMarkers(microgliaReshape,ident.1="Arf1_IFNg_KO.h5",ident.2="WT.h5",test.use="MAST")
+Microglia.Markers_Arf1_IFNg_WT$gene = rownames(Microglia.Markers_Arf1_IFNg_WT)
+
+write.table(Microglia.Markers_Arf1_IFNg_WT, "Microglia.Markers_Arf1_IFNg_WT.txt", quote=F, sep="\t", col.names = NA)
+
+
+Microglia.Markers_IFNg_WT = 
+FindMarkers(microgliaReshape,ident.1="IFNg_KO.h5",ident.2="WT.h5",test.use="MAST")
+Microglia.Markers_IFNg_WT$gene = rownames(Microglia.Markers_IFNg_WT)
+
+write.table(Microglia.Markers_IFNg_WT, "Microglia.Markers_IFNg_WT.txt", quote=F, sep="\t", col.names = NA)
+Microglia.Markers_Arf1_all = union(union(Microglia.Markers_Arf1_Arf1.IFNg.top$gene, Microglia.Markers_Arf1_IFNg.top$gene), 
+                                   Microglia.Markers_Arf1_WT.top$gene)
+
+
+```
+
+
+#### use average expression of the cells for heatmap
+```{r fig.height=3, fig.width=4}
+Idents(microgliaReshape) ="Sample"
+
+get_heatmap = function(seuratobj, features, file.name){
+  matrix = AverageExpression(microgliaReshape,features = features,assays = "SCT")
+  myheatmap = pheatmap(matrix$SCT,scale="row",cellwidth = 65)
+  pdf(file.name, height = 12, width = 10)
+  print(myheatmap)
+  dev.off()
+}
+
+get_heatmap(seuratobj = microgliaReshape,features = Arf1_vs_WT_top5, file.name = "results/heatmaps/microglia_Arf1_vs_WT_top5.pdf")
+get_heatmap(seuratobj = microgliaReshape,features = Arf1_vs_WT_top15, file.name = "results/heatmaps/microglia_Arf1_vs_WT_top15.pdf")
+get_heatmap(seuratobj = microgliaReshape,features = Arf1_vs_WT_top30, file.name = "results/heatmaps/microglia_Arf1_vs_WT_top30.pdf")
+get_heatmap(seuratobj = microgliaReshape,features = Arf1_vs_WT_top150, file.name = "results/heatmaps/microglia_Arf1_vs_WT_top150.pdf")
+
+```
+
+```{r}
+pdf("results/heatmaps/microglia_Arf1_vs_WT_allcells_top5.pdf")
+DoHeatmap(object = microgliaReshape, features = as.character(Arf1_vs_WT_top5), group.by = "Sample")
+dev.off()
+```
+
+#### microglia markers for each cluster, top 10 marker by average logFC or by p_val_adj displayed. 
+### computationally intensive. Ran on biowulf 
+```{r fig.height=5, fig.width=6}
+# calculate microglia markers for each cluster
+microgliaReshape.markers <- FindAllMarkers(microgliaReshape, only.pos = F, min.pct = 0.25, logfc.threshold = 0.25)
+dir.create("results/microglia.markers.for.each.cluster")
+write.table(microgliaReshape.markers, "results/microgliaMarker/microgliaReshape.markers_for.each.cluster.txt", quote = F, row.names = T, sep = '\t', col.names = NA)
+
+Idents(microgliaReshape) = "new_clusters"
+top10 <- microgliaReshape.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+microgliaReshape.markers_for.each.cluster_avg_logFC_top10 = 
+DoHeatmap(microgliaReshape, features = top10$gene) + NoLegend()
+pdf("results/microgliaMarker/microgliaReshape.markers_for.each.cluster_avg_logFC_top10.pdf", height = 14, width = 17)
+microgliaReshape.markers_for.each.cluster_avg_logFC_top10
+dev.off()
+```
+
+
+
+#### ORA from cluster5
+```{r}
+myCluster5_ORA = enrichGO(gene = as.character(microgliaReshape.markers.cluster5$gene),universe = as.character(rownames(microgliaReshape)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.05)
+
+
+
+dotplot(myCluster5_ORA)
+
+write.csv(myCluster5_ORA, "results/microgliaMarker/microglia.cluster5.markers_ORA.BP.csv", quote = F, row.names = F)
+
+myCluster5_BPselected1 = c("tumor necrosis factor production", "leukocyte migration","leukocyte chemotaxis","regulation of inflammatory response","cell killing","negative regulation of cell activation","neuron death")
+
+myCluster5_ORA_subset1 = myCluster5_ORA[which(myCluster5_ORA@result$Description%in%myCluster5_BPselected1),asis=T]
+
+dotplot(myCluster5_ORA_subset1)
+barplot(myCluster5_ORA_subset1) + theme_classic()
+cnetplot(myCluster5_ORA_subset1)
+emapplot(myCluster5_ORA_subset1)
+myCluster5_ORA_subset1 = mutate(myCluster5_ORA_subset1, richFactor = Count / as.numeric(sub("/\\d+", "", BgRatio)))
+
+#datatable(myCluster5_ORA@result)
+
+ggsave(filename = "results/microgliaMarker/microglia.cluster5.markers_ORA.BP.pdf",
+ggplot(myCluster5_ORA_subset1, showCategory = 10,
+  aes(richFactor, fct_reorder(Description, richFactor))) + 
+  geom_segment(aes(xend=0, yend = Description)) +
+  geom_point(aes(color=p.adjust, size = Count)) +
+  scale_color_viridis_c(guide=guide_colorbar(reverse=TRUE)) +
+  scale_size_continuous(range=c(2, 10)) +
+  xlab("rich factor") +
+  ylab(NULL) + 
+  ggtitle("Enriched Biological Process")+ 
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size=12))
+)
+```
+
+
+```{r}
+myBP_ORAs=
+enrichGO(gene = as.character(top10$gene),universe = as.character(rownames(microgliaReshape)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.01, qvalueCutoff = 0.05)
+
+myBP_ORAs
+dotplot(myBP_ORAs)
+```
+
+
+```{r}
+microgliaCluster2_Arf1_vs_WT = read.table("results/microgliaCluster_Arf1_vs_WT/cluster2_Arf1_KO.h5-WT.h5_sig.txt",
+                                          header = T, stringsAsFactors = F)
+
+myBP_ORAs_microgliaCluster2_Arf1_vs_WT=
+enrichGO(gene = rownames(microgliaCluster2_Arf1_vs_WT),universe = as.character(rownames(microgliaReshape)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.05)
+
+write.csv(myBP_ORAs_microgliaCluster2_Arf1_vs_WT, "myBP_ORAs_microgliaCluster2_Arf1_vs_WT.csv", quote = F)
+dotplot(myBP_ORAs_microgliaCluster2_Arf1_vs_WT)
+```
+
+
+#### function to generate ORA for every cluster
+```{r}
+microgliaCluster_Arf1_vs_WT = list.files("results/microgliaCluster_Arf1_vs_WT/", pattern = "sig")
+Arf1_vs_WT = list()
+Arf1_vs_WT_table = list()
+Arf1_vs_WT_avg_logFC = list()
+Arf1_vs_WT_FC = list()
+for (i in microgliaCluster_Arf1_vs_WT){
+  Arf1_vs_WT[[i]] = read.table(paste("results/microgliaCluster_Arf1_vs_WT/", i, sep = "/"), header = T, sep = '\t')
+  Arf1_vs_WT[[i]] = Arf1_vs_WT[[i]]$X
+  Arf1_vs_WT_table[[i]] = read.table(paste("results/microgliaCluster_Arf1_vs_WT/", i, sep = "/"), header = T, sep = '\t', row.names = 1)
+  Arf1_vs_WT_avg_logFC[[i]] = Arf1_vs_WT_table[[i]][,c("avg_logFC")]
+  names(Arf1_vs_WT_avg_logFC[[i]]) = rownames(Arf1_vs_WT_table[[i]])
+  Arf1_vs_WT_FC[[i]] = 2^Arf1_vs_WT_avg_logFC[[i]]
+  names(Arf1_vs_WT_FC[[i]]) = rownames(Arf1_vs_WT_table[[i]])
+  
+}
+names(Arf1_vs_WT)= stringr::str_replace(microgliaCluster_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
+names(Arf1_vs_WT_FC)= stringr::str_replace(microgliaCluster_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
+names(Arf1_vs_WT_avg_logFC)= stringr::str_replace(microgliaCluster_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
+```
+
+#### function to generate ORA for every cluster
+```{r fig.height=3, fig.width=6}
+contrast = "Arf1-WT"
+
+myBP_ORAs = lapply(Arf1_vs_WT, function(x){
+  enrichGO(gene = x,universe = as.character(rownames(microgliaReshape)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.05 )
+})
+merge_result(list(cluster0 = myBP_ORAs[["cluster0"]],cluster1 = myBP_ORAs[["cluster1"]],cluster2 = myBP_ORAs[["cluster2"]],
+                  cluster3 = myBP_ORAs[["cluster3"]],cluster4 = myBP_ORAs[["cluster4"]],cluster5 = myBP_ORAs[["cluster5"]],
+                  cluster6 = myBP_ORAs[["cluster6"]],cluster7 = myBP_ORAs[["cluster7"]],cluster8 = myBP_ORAs[["cluster8"]],
+                  cluster9 = myBP_ORAs[["cluster9"]],cluster10 = myBP_ORAs[["cluster10"]],cluster11 = myBP_ORAs[["cluster11"]],
+                  cluster12 = myBP_ORAs[["cluster12"]],cluster13 = myBP_ORAs[["cluster13"]]))%>% 
+                  dotplot(., showCategory=3) + ggtitle(paste(contrast, "gene ontology biological process", sep = " "))+     scale_y_discrete(label=short_label)
+
+
+
+lll = myBP_ORAs[["cluster2"]][which(myBP_ORAs[["cluster2"]]@result$Description%in%c("regulation of lipid metabolic process", "positive regulation of steroid metabolic process", "regulation of lipid biosynthetic process","negative regulation of lipid metabolic process")),asis=T]
+
+
+mmm = myBP_ORAs[["cluster2"]][which(myBP_ORAs[["cluster2"]]@result$Description%in%c("regulation of lipid metabolic process", "positive regulation of steroid metabolic process", "regulation of lipid biosynthetic process","negative regulation of lipid metabolic process", "lipid storage", "positive regulation of lipid localization", "lipid localization","glycolipid catabolic process","glycosphingolipid catabolic process","protein-lipid complex subunit organization")),asis=T]
+
+
+kkk= filter(myBP_ORAs[["cluster2"]], Description%in%c("regulation of lipid metabolic process", "positive regulation of steroid metabolic process", "negative regulation of lipid metabolic process", "regulation of lipid biosynthetic process", "lipid storage", "positive regulation of lipid localization", "lipid localization","glycolipid catabolic process","glycosphingolipid catabolic process","protein-lipid complex subunit organization","cellular response to lipid"))
+
+
+Arf1_vs_WT_test = read.table(paste("results/microgliaCluster_Arf1_vs_WT/cluster2_Arf1_KO.h5-WT.h5_sig.txt", sep = "/"), header = T, sep = '\t', row.names = 1)
+Arf1_vs_WT_log2fc = Arf1_vs_WT_test[,c("avg_logFC")]
+Arf1_vs_WT_fc = 2^Arf1_vs_WT_log2fc
+
+
+names(Arf1_vs_WT_fc) = rownames(Arf1_vs_WT_test)
+
+head(Arf1_vs_WT_fc)
+
+
+
+```
+
+```{r}
+dir.create("results/networks")
+ggsave(filename = "results/networks/Arf1_WT_cluster2_lipid_metabolic.png",plot = cnetplot(lll, categorySize="pvalue", foldChange=Arf1_vs_WT_avg_logFC[["cluster2"]]))
+
+ggsave(filename = "results/networks/Arf1_WT_cluster2_lipid_metabolic_no.label.pdf",plot = cnetplot(lll, categorySize="pvalue", foldChange=Arf1_vs_WT_avg_logFC[["cluster2"]], node_label="none"))
+
+cnetplot(lll, categorySize="pvalue", foldChange=Arf1_vs_WT_avg_logFC[["cluster2"]], layout = "kk") 
+
+
+```
+
+
+```{r}
+heatplot(lll, foldChange=Arf1_vs_WT_avg_logFC[["cluster2"]])
+```
+
+```{r}
+require(ggraph)
+emapplot(myBP_ORAs[["cluster2"]])
+emapplot(mmm, pie_scale=1.5,layout="kk") 
+emapplot(mmm) 
+
+ggsave(filename = "results/networks/Arf1_WT_cluster2_emapplot_lipid_metabolic.pdf",plot = emapplot(mmm, categorySize="pvalue", foldChange=Arf1_vs_WT_avg_logFC[["cluster2"]]))
+
+ggsave(filename = "results/networks/Arf1_WT_cluster2_emapplot_lipid_metabolic_no.label.png",plot = emapplot(mmm, categorySize="pvalue", foldChange=Arf1_vs_WT_avg_logFC[["cluster2"]], layout = "nicely"))
+```
+
+#### function to generate ORA for every cluster
+```{r}
+myORA = function(contrast, geneList){
+  myBP_ORAs = lapply(geneList, function(x){
+  enrichGO(gene = x,universe = as.character(rownames(microgliaReshape)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.05 )
+})
+  myMergeplot = 
+  merge_result(list(cluster0 = myBP_ORAs[["cluster0"]],cluster1 = myBP_ORAs[["cluster1"]],cluster2 = myBP_ORAs[["cluster2"]],
+                  cluster3 = myBP_ORAs[["cluster3"]],cluster4 = myBP_ORAs[["cluster4"]],cluster5 = myBP_ORAs[["cluster5"]],
+                  cluster6 = myBP_ORAs[["cluster6"]],cluster7 = myBP_ORAs[["cluster7"]],cluster8 = myBP_ORAs[["cluster8"]],
+                  cluster9 = myBP_ORAs[["cluster9"]],cluster10 = myBP_ORAs[["cluster10"]],cluster11 = myBP_ORAs[["cluster11"]],
+                  cluster12 = myBP_ORAs[["cluster12"]],cluster13 = myBP_ORAs[["cluster13"]]))%>% 
+                  dotplot(., showCategory=3) + ggtitle(paste(contrast, "gene ontology biological process", sep = " "))+     scale_y_discrete(label=short_label)
+  
+  path_out = "~/Desktop/active_projects/ccbr1045_singleCell/analysis/results/ORA/"
+writeFile = function(data, name){
+  fileName = paste(path_out, name, sep='')
+  write.csv(data, fileName)
+}
+# 
+# writeFile(myBP_ORAs[["cluster0"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster0"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster1"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster1"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster2"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster2"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster3"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster3"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster4"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster4"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster5"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster5"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster6"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster6"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster7"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster7"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster8"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster8"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster9"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster9"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster10"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster10"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster11"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster11"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster12"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster12"]),"_",contrast,".csv"))
+# writeFile(myBP_ORAs[["cluster13"]], paste0("myBP_ORAs_",names(myBP_ORAs["cluster13"]),"_",contrast,".csv"))
+
+writeFile(myBP_ORAs[["cluster0"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster0"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster1"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster1"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster2"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster2"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster3"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster3"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster4"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster4"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster5"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster5"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster6"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster6"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster7"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster7"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster8"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster8"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster9"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster9"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster10"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster10"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster11"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster11"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster12"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster12"]),"_",".csv"))
+writeFile(myBP_ORAs[["cluster13"]], paste0("contrast_",contrast,"_",names(myBP_ORAs["cluster13"]),"_",".csv"))
+
+# pdf(paste0(path_out,"myBP_ORAs_", contrast,".pdf"),height = 8, width = 16)
+pdf(paste0(path_out,contrast,".pdf"),height = 8, width = 16)
+print(myMergeplot)
+dev.off()
+myMergeplot
+}
+
+```
+
+```{r}
+myBP_ORAs_markers.cluster5 =
+enrichGO(gene = microgliaReshape.markers.cluster5$gene,universe = as.character(rownames(microgliaReshape)),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.05 )
+myBP_ORAs_markers.cluster5@
+
+dotplot(myBP_ORAs_markers.cluster5)
+```
+
+
+```{r fig.height=3, fig.width=6}
+myORA(contrast = "Arf1-WT",geneList = get_geneList(dir = "results/microgliaCluster_Arf1_vs_WT/", listName = Arf1_vs_WT))
+```
+
+
+```{r fig.height=3, fig.width=6}
+myORA(contrast = "Arf1-Arf1_IFNg",geneList = get_geneList(dir = "results/microgliaCluster_Arf1_vs_Arf1_IFNg/", listName = Arf1_vs_Arf1_IFNg))
+```
+
+
+```{r fig.height=3, fig.width=6}
+myORA(contrast = "Arf1-IFNg",geneList = get_geneList(dir = "results/microgliaCluster_Arf1_vs_IFNg/", listName = Arf1_vs_IFNg))
+
+```
+
+
+```{r fig.height=3, fig.width=6}
+myORA(contrast = "Arf1_IFNg-WT",geneList = get_geneList(dir = "results/microgliaCluster_Arf1_IFNg_vs_WT/", listName = Arf1_IFNg_vs_WT))
+```
+
+
+```{r fig.height=3, fig.width=6}
+myORA(contrast = "IFNg-WT",geneList = get_geneList(dir = "results/microgliaCluster_IFNg_vs_WT/", listName = IFNg_vs_WT))
+```
+
+
+```{r}
+Arf1_vs_WT_deg_df =
+get_geneList(dir = "results/microgliaCluster_Arf1_vs_WT/", listName = Arf1_vs_WT)%>% unlist() %>%table() %>% as.data.frame() 
+colnames(Arf1_vs_WT_deg_df)[1] = "genes"
+Arf1_vs_WT_deg_df = Arf1_vs_WT_deg_df[order(Arf1_vs_WT_deg_df$Freq, decreasing = T),]
+View(Arf1_vs_WT_deg_df)
+Arf1_vs_WT_degTables = get_degTable(dir = "results/microgliaCluster_Arf1_vs_WT/", listName = Arf1_vs_WT)
+Arf1_vs_WT_deg_genes = AverageExpression(microgliaReshape, features = Arf1_vs_WT_deg_df$genes, assays = "SCT")
+Arf1_vs_WT_deg_genes = data.frame(Arf1_vs_WT_deg_genes$SCT)
+Arf1_vs_WT_deg_genes$regulation = ifelse(Arf1_vs_WT_deg_genes$Arf1_KO.h5<Arf1_vs_WT_deg_genes$WT.h5, "down-regulated", "up-regulated")
+Arf1_vs_WT_deg_genes$genes = rownames(Arf1_vs_WT_deg_genes)
+
+Arf1_vs_WT_down = Arf1_vs_WT_deg_genes[which(Arf1_vs_WT_deg_genes$regulation=="down-regulated"),]
+Arf1_vs_WT_down$Arf1.vs.all = ifelse(Arf1_vs_WT_down$Arf1_KO.h5<Arf1_vs_WT_down$Arf1_IFNg_KO.h5&
+       Arf1_vs_WT_down$Arf1_KO.h5<Arf1_vs_WT_down$IFNg_KO.h5, "down-regulated","notAll")
+Arf1_vs_WT_up = Arf1_vs_WT_deg_genes[which(Arf1_vs_WT_deg_genes$regulation=="up-regulated"),]
+Arf1_vs_WT_up$Arf1.vs.all = ifelse(Arf1_vs_WT_up$Arf1_KO.h5>Arf1_vs_WT_up$Arf1_IFNg_KO.h5&
+       Arf1_vs_WT_up$Arf1_KO.h5>Arf1_vs_WT_up$IFNg_KO.h5, "up-regulated","notAll")
+
+
+
+Arf1_vs_WT_df2 = merge(Arf1_vs_WT_deg_df, rbind(Arf1_vs_WT_down,Arf1_vs_WT_up), by="genes")
+Arf1_vs_WT_df2 = Arf1_vs_WT_df2[order(Arf1_vs_WT_df2$Freq, decreasing = T),]
+write.csv(Arf1_vs_WT_df2, "results/Arf1-all_Regulated.csv", quote = F, row.names = F)
+
+Arf1_vs_WT_upReg = Arf1_vs_WT_df2[which(Arf1_vs_WT_df2$Arf1.vs.all=="up-regulated"),]
+rownames(Arf1_vs_WT_upReg)= Arf1_vs_WT_upReg$genes
+Arf1_vs_WT_upReg = data.matrix(Arf1_vs_WT_upReg[,3:6])
+Arf1_vs_WT_downReg = Arf1_vs_WT_df2[which(Arf1_vs_WT_df2$Arf1.vs.all=="down-regulated"),]
+rownames(Arf1_vs_WT_downReg)= Arf1_vs_WT_downReg$genes
+Arf1_vs_WT_downReg = data.matrix(Arf1_vs_WT_downReg[,3:6])
+Arf1_vs_WT_upmap = pheatmap(Arf1_vs_WT_upReg[1:50,],scale="row",cellwidth = 65, main = "Up-regulated genes")
+Arf1_vs_WT_downmap = pheatmap(Arf1_vs_WT_downReg[1:50,],scale="row",cellwidth = 65, main = "Down-regulated genes")
+
+
+
+
+pdf("results/heatmaps/Arf1-all_upRegulated.pdf", width = 7, height = 9)
+Arf1_vs_WT_upmap
+dev.off()
+pdf("results/heatmaps/Arf1-all_downRegulated.pdf", width = 7, height = 9)
+Arf1_vs_WT_downmap
+dev.off()
+```
+
+
+
+
+
+```{r}
+get_Terms(contrast = "Arf1-WT")
+
+contrast = "Arf1-WT"
+myterms = list()
+for (i in list.files(path = "results/ORA/", pattern = paste0("contrast_",contrast,"_cluster"))){
+  myterms[[i]] = read.csv(paste0("results/ORA/", i), header = T, stringsAsFactors = F)
+  myterms[[i]] = myterms[[i]][, c("Description","geneID")]
+
+  }
+
+
+```
+
+
+```{r}
+get_Terms = function(contrast){
+  myterms = list()
+  bp = list()
+  for (i in list.files(path = "results/ORA/", pattern = paste0("contrast_",contrast,"_cluster"))){
+  myterms[[i]] = read.csv(paste0("results/ORA/", i), header = T, stringsAsFactors = F)
+  return(myterms)
+  }
+}
+
+
+get_topTerms = function(contrast){
+  myterms = list()
+  bp = list()
+  for (i in list.files(path = "results/ORA/", pattern = paste0("contrast_",contrast,"_cluster"))){
+  myterms[[i]] = read.csv(paste0("results/ORA/", i), header = T, stringsAsFactors = F)
+  bp[[i]] = myterms[[i]]$Description
+  GObp = unlist(bp)
+  }
+  df_term =as.data.frame(table(GObp))
+  df_term = df_term[order(df_term$Freq, decreasing = T),]
+  df_term = df_term[1:20,]
+  bpPlot = 
+  ggplot(df_term, aes(x = reorder(GObp, Freq), y = Freq)) + geom_bar(stat = "identity") + coord_flip() + 
+  scale_y_continuous(breaks = seq(0, 14, by=2), limits=c(0,14)) + xlab("biological process") +
+  ggtitle(paste(contrast, ":", "top enriched biological process")) + scale_x_discrete(label=short_label)
+  pdf(paste0("results/ORA/", contrast, "_freq.pdf"), width = 7.5)
+  print(bpPlot)
+  dev.off()
+  return(bpPlot)
+}
+
+```
+
+
+
+```{r}
+get_topTerms(contrast = "Arf1-WT")
+
+```
+
+
+```{r}
+
+get_topTerms(contrast = "Arf1_IFNg-WT")
+```
+
+
+```{r}
+get_topTerms(contrast = "Arf1-IFNg")
+
+```
+
+
+```{r}
+get_topTerms(contrast = "Arf1-Arf1_IFNg")
+
+
+```
+
+```{r}
+get_topTerms(contrast = "IFNg-WT")
+```
+
+
+```{r}
+#regulation of lipid metabolic process is sigificant in cluster1, cluster2,cluster3,cluster7,cluster8,cluster9,cluster11
+
+get_genesORA = function(file.name, pathway.name){
+  ORA = read.csv(file.name, header = T, stringsAsFactors = F)
+  ORA_term = ORA[which(ORA$Description==pathway.name,), c("geneID")]
+  ORA_term = strsplit(as.character(ORA_term), '\\/')
+  ORA_term_gene = unlist(ORA_term)
+  return(ORA_term_gene)
+}
+
+cluster1.ORA = get_genesORA(file.name = "results/ORA/contrast_Arf1-WT_cluster1_.csv",pathway.name = "regulation of lipid metabolic process")
+cluster2.ORA = get_genesORA(file.name = "results/ORA/contrast_Arf1-WT_cluster2_.csv",pathway.name = "regulation of lipid metabolic process")
+cluster3.ORA = get_genesORA(file.name = "results/ORA/contrast_Arf1-WT_cluster3_.csv",pathway.name = "regulation of lipid metabolic process")
+cluster7.ORA = get_genesORA(file.name = "results/ORA/contrast_Arf1-WT_cluster7_.csv",pathway.name = "regulation of lipid metabolic process")
+cluster8.ORA = get_genesORA(file.name = "results/ORA/contrast_Arf1-WT_cluster8_.csv",pathway.name = "regulation of lipid metabolic process")
+cluster9.ORA = get_genesORA(file.name = "results/ORA/contrast_Arf1-WT_cluster9_.csv",pathway.name = "regulation of lipid metabolic process")
+cluster11.ORA = get_genesORA(file.name = "results/ORA/contrast_Arf1-WT_cluster11_.csv",pathway.name = "regulation of lipid metabolic process")
+
+regulation.of.lipid = c(cluster1.ORA, cluster2.ORA,cluster3.ORA,cluster7.ORA,cluster8.ORA,cluster9.ORA,cluster11.ORA)
+regulation.of.lipid = as.data.frame(table(regulation.of.lipid))
+colnames(regulation.of.lipid)[1] = "genes_regulation_of_lipid_metabolism"
+
+
+ggplot(regulation.of.lipid, aes(x = reorder(genes_regulation_of_lipid_metabolism, Freq), y = Freq)) +coord_flip() + 
+  geom_bar(stat = "identity") + 
+  ggtitle("DEGs (Arf1-WT) in the regulation of lipid metabolic process pathway") +
+  xlab("genes")
+```
+
+
+
+```{r fig.height=3, fig.width=4}
+DotPlot(microgliaReshape, features = regulation.of.lipid$genes_regulation_of_lipid_metabolism) + coord_flip()
+```
+
+```{r}
+Idents(microgliaReshape) ="Sample"
+lipid.genes.ave = AverageExpression(microgliaReshape,features = regulation.of.lipid$genes_regulation_of_lipid_metabolism,assays = "SCT")
+lipid.genes.ave = lipid.genes.ave$SCT
+lipid.genes.ave$regulation = ifelse(lipid.genes.ave$Arf1_KO.h5<lipid.genes.ave$WT.h5, "down-regulated", "up-regulated")
+lipid.genes.ave_down = lipid.genes.ave[which(lipid.genes.ave$regulation=="down-regulated"),]
+lipid.genes.ave_down$regulationAll = ifelse(lipid.genes.ave_down$Arf1_KO.h5<lipid.genes.ave_down$Arf1_IFNg_KO.h5&
+                                            lipid.genes.ave_down$Arf1_KO.h5<lipid.genes.ave_down$IFNg_KO.h5, "down-regulated", "notAll")
+lipid.genes.ave_up = lipid.genes.ave[which(lipid.genes.ave$regulation=="up-regulated"),]
+lipid.genes.ave_up$regulationAll = ifelse(lipid.genes.ave_up$Arf1_KO.h5>lipid.genes.ave_up$Arf1_IFNg_KO.h5&
+                                            lipid.genes.ave_up$Arf1_KO.h5>lipid.genes.ave_up$IFNg_KO.h5, "up-regulated", "notAll")
+lipid.genes.ave_upAll = lipid.genes.ave_up[which(lipid.genes.ave_up$regulationAll=="up-regulated"), 1:4]
+lipid.genes.ave_downAll = lipid.genes.ave_down[which(lipid.genes.ave_down$regulationAll=="down-regulated"), 1:4]
+
+
+lipidUp = pheatmap(lipid.genes.ave_upAll,scale="row",cellwidth = 65, main = "Up-regulated genes in lipid metabolic process")
+lipidDown = pheatmap(lipid.genes.ave_downAll,scale="row",cellwidth = 65, main = "Down-regulated genes in lipid metabolic process")
+
+pdf("results/heatmaps/Up-regulated_genes_lipid_metabolic_process.pdf")
+lipidUp
+dev.off()
+pdf("results/heatmaps/Down-regulated_genes_lipid_metabolic_process.pdf")
+lipidDown
+dev.off()
+```
+
+Interesting gene heatmap
+```{r}
+interestingGenesA = c("TNF", "Il1b", "IL1a", "C1qa", "C1qb", "C1qc", "Stat1", "Nlrp3", "Casp1")
+interestingGenesB = c("Il1b","C1qa", "C1qb", "C1qc", "Stat1", "Nlrp3", "Casp1")
+interestingGenes%in%rownames(microgliaReshape)
+
+interestingGenesC = c("Apod", "Gh", "Hcar2")
+
+interestingGenesExp = AverageExpression(microgliaReshape,features = interestingGenesB,assays = "SCT")
+interestingGenesExpA = AverageExpression(y_,features = interestingGenesB,assays = "SCT")
+
+interestingGenesHeatmap = pheatmap(data.matrix(interestingGenesExp$SCT),scale="row",cellwidth = 65, main = "interesting genes")
+
+```
+```{r}
+length(rownames(microgliaReshape))
+interestingGenesA%in%rownames(y_x.rds_1.2)
+```
+
+
+```{r}
+FeaturePlot(object = y_x.rds_1.2, features = "Apod",split.by = "Sample", ncol = 2)
+
+
+
+FeaturePlot(object = microgliaReshape, features = rownames(lipid.genes.ave_upAll)[1], split.by = "Sample")
+
+dir.create("results/FeaturePlots/lipid.metabolism.UpReg")
+lapply(rownames(lipid.genes.ave_upAll), function(gene){
+  pdf(paste0("results/FeaturePlots/lipid.metabolism.UpReg/", gene, ".pdf"), height = 2.5, width = 10)
+  print(FeaturePlot(object = microgliaReshape, features = gene, split.by = "Sample"))
+  dev.off()
+})
+
+
+
+dir.create("results/FeaturePlots/lipid.metabolism.DownReg")
+lapply(rownames(lipid.genes.ave_downAll), function(gene){
+  pdf(paste0("results/FeaturePlots/lipid.metabolism.DownReg/", gene, ".pdf"), height = 2.5, width = 10)
+  print(FeaturePlot(object = microgliaReshape, features = gene, split.by = "Sample"))
+  dev.off()
+})
+
+
+```
+
+
+```{r fig.height=3, fig.width=4}
+get_heatmap(seuratobj = microgliaReshape,features = regulation.of.lipid$genes_regulation_of_lipid_metabolism, file.name = "results/heatmaps/microglia_Arf1_vs_WT_regulation_of_lipid_metabolism.pdf")
+
+```
+
+
+```{r}
+#translate symbols to entrez for KEGG ORA
+universe_microgliaReshape_entrez = bitr(rownames(microgliaReshape), fromType = "SYMBOL", toType = "ENTREZID",OrgDb = org.Mm.eg.db)
+
+Arf1_vs_WT_entrez = lapply(Arf1_vs_WT, function(x){
+  bitr(x, fromType = "SYMBOL", toType = "ENTREZID",OrgDb = org.Mm.eg.db)
+})
+```
+
+```{r eval=FALSE, include=FALSE}
+#There are very few significant pathways in the KEGG database
+contrast = "Arf1-WT"
+myKEGG_ORAs = Map(function(x,y) enrichKEGG(gene = as.character(x$ENTREZID), universe = as.character(y), organism = 'mmu',
+pvalueCutoff = 0.05, pAdjustMethod = "BH", qvalueCutoff = 0.05,minGSSize = 10, maxGSSize = 500), x=Arf1_vs_WT_entrez, y=universe_microgliaReshape_entrez)
+
+
+merge_result(list(cluster0 = myKEGG_ORAs[["cluster0"]],cluster1 = myKEGG_ORAs[["cluster1"]],cluster2 = myKEGG_ORAs[["cluster2"]],
+                  cluster3 = myKEGG_ORAs[["cluster3"]],cluster4 = myKEGG_ORAs[["cluster4"]],cluster5 = myKEGG_ORAs[["cluster5"]],
+                  cluster6 = myKEGG_ORAs[["cluster6"]],cluster7 = myKEGG_ORAs[["cluster7"]],cluster8 = myKEGG_ORAs[["cluster8"]],
+                  cluster9 = myKEGG_ORAs[["cluster9"]],cluster10 = myKEGG_ORAs[["cluster10"]],cluster11 = myKEGG_ORAs[["cluster11"]],
+                  cluster12 = myKEGG_ORAs[["cluster12"]],cluster13 = myKEGG_ORAs[["cluster13"]]))%>% 
+                  dotplot(., showCategory=3) + ggtitle(paste(contrast, "KEGG pathways", sep = " "))+     scale_y_discrete(label=short_label)
+```
+
+```{r}
+library(DOSE)
+data(geneList)
+head(geneList)
+de <- names(geneList)[abs(geneList) > 2]
+x = enrichDO(de)
+class(x)
+edo <- enrichDGN(de)
+filter(x, Description==c("breast carcinoma","pre-malignant neoplasm", "in situ carcinoma"))
+barplot(edo, showCategory=20)
+edox <- setReadable(edo, 'org.Hs.eg.db', 'ENTREZID')
+cnetplot(edox, foldChange=geneList)
+```

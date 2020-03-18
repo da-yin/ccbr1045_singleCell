@@ -1,0 +1,111 @@
+---
+title: "ccbr1045_seuratObjectSubset"
+author: "Da"
+date: "3/17/2020"
+output: html_document
+---
+
+Objective:
+
+- subset the original merged y_x.rds_1.2 seurat object to only include microglal cells predicted by SingleR Tabula Muris
+- Filter out subclusters within cells annotated as microglal cells but with no microglia markers expression (false annotation)
+- rename the original seurat_clusters with new_clusters.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Select only the microglial cells annotated by Tebula Muris, reclusterd the cells
+```{r}
+Idents(y_x.rds_1.2) = "tabulaMuris"
+microgliaSubset = subset(y_x.rds_1.2, cells=which(y_x.rds_1.2$tabulaMuris=="microglial cell"))
+DimPlot(microgliaSubset, split.by = "Sample",ncol=2)+ NoLegend()
+
+```
+
+#### Use elbowPlot to find the number of PC to use for clustering
+```{r}
+DefaultAssay(microgliaSubset) = "RNA"
+microgliaReshape = SCTransform(microgliaSubset)
+microgliaReshape = RunPCA(microgliaReshape)
+ElbowPlot(microgliaReshape)
+```
+
+##### Do the subsequent analysis using microgliaReshape seurat object only.
+```{r}
+npcs = 15
+microgliaReshape= RunUMAP(microgliaReshape, dims = 1:npcs)
+microgliaReshape = FindNeighbors(microgliaReshape)
+microgliaReshape = FindClusters(microgliaReshape,algorithm=3,resolution=0.3)
+saveRDS(object = microgliaReshape,file = "processedData/microgliaReshape.rds")
+umap_seurat_clusters = 
+DimPlot(microgliaReshape,group.by="seurat_clusters",split.by="Sample",label=T, ncol=2, repel = T)+NoLegend()+ 
+    theme(text = element_text(size = 8)) + SeuratAxes()
+pdf("results/umaps/umap_seurat_clusters_microglia.pdf")
+umap_seurat_clusters
+dev.off()
+umap_seurat_clusters
+
+pdf("results/umaps/umap_seurat_clusters_microglia_merged.pdf")
+DimPlot(microgliaReshape, reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,group.by="seurat_clusters")+ NoLegend()
+dev.off()
+
+```
+
+#### In the original seurat clusters, the numbers are awkward(it labels first cluster as cluster 0). In addition, seurat clusters 0,1,2,3,5 appears together on the umap and turns out to be transitional states(as later analysis shows). A new_cluster group is created so that it goes from 1, 2, 3, 4, 5...14. Total of 14 clusters. The first five 1-5 turns out to be very interesting.
+```{r}
+# Create new groups: new_cluster that change 4 to 6 and 5 to 5, and everything else plus 1. 
+microgliaReshape@meta.data$new_clusters = ifelse(microgliaReshape@meta.data$seurat_clusters==0,1,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==1,2,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==2,3,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==3,4,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==4,6,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==5,5,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==6,7,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==7,8,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==8,9,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==9,10,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==10,11,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==11,12,
+                                         ifelse(microgliaReshape@meta.data$seurat_clusters==12,13,14)))))))))))))
+
+microgliaReshape@meta.data$new_clusters = as.factor(microgliaReshape@meta.data$new_clusters)
+
+
+# create new sample name to get rid of the .h5
+microgliaReshape@meta.data$SampleName = ifelse(microgliaReshape@meta.data$Sample=="Arf1_IFNg_KO.h5", "Arf1_IFNg_KO",
+                                        ifelse(microgliaReshape@meta.data$Sample=="Arf1_KO.h5", "Arf1_KO",
+                                        ifelse(microgliaReshape@meta.data$Sample=="IFNg_KO.h5", "IFNg_KO", "WT")))
+
+microgliaReshape@meta.data$cell = rownames(microgliaReshape@meta.data)
+
+```
+
+
+
+#### based on the FindAllMarker heatmap and expression profile of microglia markers in the main analysis, cluster6 and cluster14 appears to be non-microglia cells. So remove them and rename the new_clusters.
+```{r}
+microgliaReshape = subset(microgliaReshape, cells=which(microgliaReshape$new_clusters%in%c(1,2,3,4,5,7,8,9,10,11,12,13)))
+
+
+microgliaReshape@meta.data$new_clusters = ifelse(microgliaReshape@meta.data$new_clusters==1,1,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==2,2,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==3,3,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==4,4,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==5,5,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==7,6,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==8,7,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==9,8,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==10,9,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==11,10,
+                                         ifelse(microgliaReshape@meta.data$new_clusters==12,11,12)))))))))))
+
+microgliaReshape@meta.data$new_clusters = as.factor(microgliaReshape@meta.data$new_clusters)
+
+DimPlot(microgliaReshape, reduction = "umap", group.by = "new_clusters", label = T, repel = T) +NoLegend()
+
+#save the updated microglial object 
+saveRDS(microgliaReshape, file = "~/Desktop/active_projects/seuratObject/microgliaReshape.rds")
+```
