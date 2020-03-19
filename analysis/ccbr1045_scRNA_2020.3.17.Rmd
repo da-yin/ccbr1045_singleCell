@@ -25,7 +25,7 @@ Folder structure
 |       ├── microgliaCluster5# Analysis for cluster5
 │   ├── *.Rmd                # R scripts 
 │   ├── *.html               # Rmarkdown html knit file (run Rmd to get html)
-├── reports                  # ppt
+├── reports                  # samples_QC.html generated using CCBR pipeliner (Nathan Wong). Pdfs and ppts for presentation.
 ├── ref                      # methods and references
 ├── readme.md                # analysis summary                       
 └── ...
@@ -70,6 +70,7 @@ library(MAST)
 library(dplyr)
 library(tidyverse)
 library(ggrepel)
+library(RColorBrewer)
 library(pheatmap)
 library(clusterProfiler)
 library(org.Mm.eg.db)
@@ -364,9 +365,14 @@ ggplot(cluster.main.Apoe, aes(x = cluster, y = value, color=cluster)) +
 #### Subset main microglia subclusters
 ```{r}
 microglia.mainSubset = subset(microgliaReshape, cells=which(microgliaReshape$new_clusters%in%c(1,2,3,4,5)))
-DimPlot(microglia.mainSubset, reduction = "pca", label = T, repel = T, pt.size = 0.005)
+DimPlot(microglia.mainSubset, reduction = "pca", label = T, repel = T, pt.size = 0.005) 
+
+```
+
+```{r}
 DimPlot(microgliaReshape, reduction = "umap", label = T, repel = T, pt.size = 0.001) + NoLegend()
 ```
+
 
 ##### Find out the percentage of microglia in each subcluster for each sample
 ```{r}
@@ -558,7 +564,7 @@ myVolcano(file = "Arf1_Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_Arf1_IFNg",
 ```{r}
 Arf1_WT_s2s = read.table("~/Desktop/active_projects/ccbr1045_singleCell/analysis/results/microglia_Arf1_vs_WT/Arf1_WT_degs.txt", stringsAsFactors = F)
 Arf1_WT_s2s$gene = rownames(Arf1_WT_s2s)
-Arf1_WT_s2s$p_val=ifelse(Arf1_WT_s2s$p_val==0, 8.402512e-306, Arf1_WT_s2s$p_val)
+Arf1_WT_s2s$p_val=ifelse(Arf1_WT_s2s$p_val==0, 5e-324, Arf1_WT_s2s$p_val)
 Arf1_WT_s2s$Arf1_WT.signed.value = sign(Arf1_WT_s2s$avg_logFC)*log10(Arf1_WT_s2s$p_val)*abs(Arf1_WT_s2s$avg_logFC)*-1
 
 ALS = read.csv("~/Desktop/active_projects/ccbr1045_singleCell/analysis/processedData/SOD1_Microglia_DEGs.csv", stringsAsFactors = F)
@@ -651,46 +657,128 @@ ggsave(filename = "results/microglia_Arf1_vs_WT/Arf1_WT_DAM_signed.value.pdf", p
 write.table(Arf1_WT_DAM.merged, "results/microglia_Arf1_vs_WT/Arf1_WT_DAM_signed.value.txt", quote = F, row.names = F, sep = '\t')
 ```
 
-#### Since cluster 5 is enriched in the Arf1 sample vs other, test ORA on the cluster5 DEGs
+#### microglia markers for each cluster, top 10 marker by average logFC or by p_val_adj displayed. 
+### computationally intensive. Ran on biowulf 
+```{r fig.height=5, fig.width=6}
+# calculate microglia markers for each cluster
+microgliaReshape.markers <- FindAllMarkers(microgliaReshape, only.pos = F, min.pct = 0.25, logfc.threshold = 0.25)
+dir.create("results/microglia.markers.for.each.cluster")
+write.table(microgliaReshape.markers, "results/microgliaMarker/microgliaReshape.markers_for.each.cluster.txt", quote = F, row.names = T, sep = '\t', col.names = NA)
+
+Idents(microgliaReshape) = "new_clusters"
+top10 <- microgliaReshape.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+microgliaReshape.markers_for.each.cluster_avg_logFC_top10 = 
+DoHeatmap(microgliaReshape, features = top10$gene) + NoLegend()
+pdf("results/microgliaMarker/microgliaReshape.markers_for.each.cluster_avg_logFC_top10.pdf", height = 14, width = 17)
+microgliaReshape.markers_for.each.cluster_avg_logFC_top10
+dev.off()
+```
+
+#### Top 500 most variable genes (mean expression) cluster1 - 5
+```{r}
+Idents(microgliaReshape) = "new_clusters"
+microgliaReshape_new_clusters_avergeExp = AverageExpression(microgliaReshape ,assays = "SCT")
+
+microgliaReshape_new_clusters_avergeExp = data.matrix(microgliaReshape_new_clusters_avergeExp$SCT)
+m1_5 = microgliaReshape_new_clusters_avergeExp[,1:5]
+
+var_genes = apply(m1_5, 1, var)
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:500]
+select_var_count = m1_5[select_var,]
+
+plotheamp = 
+pheatmap(data.matrix(select_var_count),scale="row", fontsize_row = 0.1)
+
+ggsave(filename = "results/heatmaps/Cluster12345_mostVariable_genes.pdf",plot = plotheamp)
+
+```
+
+
+
+#### comparing top markers in cluster5-all to Alzheimer’s Disease deg markers
 ```{r}
 microgliaReshape.markers = read.table("results/microgliaMarker/microgliaReshape.markers_for.each.cluster.txt", header = T, stringsAsFactors = F)
+microgliaReshape.markers$p_val_adj = ifelse(microgliaReshape.markers$p_val_adj==0, 5e-324, microgliaReshape.markers$p_val_adj)
+microgliaReshape.markers$p_val = ifelse(microgliaReshape.markers$p_val==0, 5e-324, microgliaReshape.markers$p_val_adj)
+microgliaReshape.markers.cluster5 = microgliaReshape.markers[which(microgliaReshape.markers$cluster==5),]
 
-```
+cluster5.signed = microgliaReshape.markers.cluster5
+cluster5.signed$cluster5_all.signed.value = sign(cluster5.signed$avg_logFC) * abs(cluster5.signed$avg_logFC) * log10(cluster5.signed$p_val)  * -1
 
-#### comparing top markers in Arf1-WT to Alzheimer’s Disease deg markers
-```{r}
+DAM = read.csv("~/Desktop/active_projects/ccbr1045_singleCell/analysis/processedData/suppData3_KerenShaul2017_DAM.csv", stringsAsFactors = F)
+colnames(DAM) = c("gene", "counts", "FC_DAM_homeostatic.microglia", "log10Pvalue", "FDR")
+DAM = DAM[!is.na(DAM$FC_DAM_homeostatic.microglia),]
+DAM$DAM.signed.value = sign(DAM$FC_DAM_homeostatic.microglia) * log2(abs(DAM$FC_DAM_homeostatic.microglia)) * DAM$log10Pvalue 
+DAM = DAM[,c(1,3,4,5,6)]
 
-ggsave(filename = "results/microgliaMarker/microglia.cluster5.top10.markers_DAM_signed.value.pdf",
-    ggplot(Arf1_WT_DAM.merged, aes(x = Arf1_WT.signed.value,y = DAM.signed.value)) + geom_point(alpha=0.5, color=ifelse(Arf1_WT_DAM.merged$gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene,"red", "darkgrey"))+
+DAM = DAM[which(DAM$gene%in%intersect(DAM$gene, cluster5.signed$gene)),]
+
+cluster5.signed_select = cluster5.signed[which(cluster5.signed$gene%in%intersect(DAM$gene, cluster5.signed$gene)),]
+cluster5.signed_DAM.merged = merge(cluster5.signed_select, DAM, by="gene")
+cluster5.signed_DAM.merged = cluster5.signed_DAM.merged[,c("gene","cluster5_all.signed.value","DAM.signed.value")]
+
+plot_DAM=
+  ggplot(cluster5.signed_DAM.merged, aes(x = cluster5_all.signed.value,y = DAM.signed.value)) + geom_point(alpha=0.5)+
          geom_vline(xintercept = 0, linetype="dashed", color = "red")+
          geom_hline(yintercept = 0, linetype="dashed", color = "red")+
     theme(legend.position = "none", axis.text.x = element_text(size = 10),
           axis.text.y = element_text(size=10))+
-  geom_text_repel(size=4.5, aes(label= ifelse(gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene, gene,""),colour = "red",fontface="bold"))
-)
-```
-#### comparing top markers in Arf1-WT to ALS Disease deg markers
+  geom_text_repel(size=4.5, aes(label= ifelse(abs(cluster5_all.signed.value)>30&abs(DAM.signed.value)>30, gene,""),colour = "red",fontface="bold"))
 
+print(plot_DAM)
+ggsave(filename = "results/microgliaCluster5/cluster5_DAM_signed.value.pdf", plot =plot_DAM)
+
+write.table(cluster5.signed_DAM.merged, "results/microgliaCluster5/cluster5_DAM_signed.value.txt", quote = F, row.names = F, sep = '\t')
+
+```
+
+#### comparing top markers in cluster5-all to ALS Disease deg markers
 ```{r}
-ggsave(filename = "results/microgliaMarker/microglia.cluster5.top10.markers_ALS_signed.value.pdf",
-    ggplot(Arf1_WT_ALS.merged, aes(x = Arf1_WT.signed.value,y = ALS.signed.value)) + geom_point(alpha=0.5, color=ifelse(Arf1_WT_ALS.merged$gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene,"red", "darkgrey"))+
+
+ALS = read.csv("~/Desktop/active_projects/ccbr1045_singleCell/analysis/processedData/SOD1_Microglia_DEGs.csv", stringsAsFactors = F)
+commonGenes = intersect(cluster5.signed$gene, ALS$Official.Symbol)
+cluster5_select = cluster5.signed[which(cluster5.signed$gene%in%commonGenes),]
+ALS_select = ALS[which(ALS$Official.Symbol%in%commonGenes),]
+# Arf1_WT_select$p_val=ifelse(Arf1_WT_select$p_val==0, 8.402512e-306, Arf1_WT_select$p_val)
+# Arf1_WT_select$Arf1_WT.signed.value = sign(Arf1_WT_select$avg_logFC)*log10(Arf1_WT_select$p_val)*abs(Arf1_WT_select$avg_logFC)*-0.1
+ALS_select$ALS.signed.value = log10(ALS_select$P.value) * log2(ALS_select$Fold.change.Mutant.Control) * -1
+colnames(ALS_select)[2]="gene"
+cluster5_ALS.merged = merge(cluster5_select, ALS_select, by="gene")
+cluster5_ALS.merged = cluster5_ALS.merged[,c("gene","cluster5_all.signed.value","ALS.signed.value")]
+
+plot_cluster5_ALS = 
+ggplot(cluster5_ALS.merged, aes(x = cluster5_all.signed.value,y = ALS.signed.value)) + geom_point(alpha=0.5)+
          geom_vline(xintercept = 0, linetype="dashed", color = "red")+
          geom_hline(yintercept = 0, linetype="dashed", color = "red")+
     theme(legend.position = "none", axis.text.x = element_text(size = 10),
           axis.text.y = element_text(size=10))+
-  geom_text_repel(size=4.5, aes(label= ifelse(gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene, gene,""),colour = "red",fontface="bold"))
-)
+  geom_text_repel(size=4.5, aes(label= ifelse(abs(cluster5_all.signed.value)>35&abs(ALS.signed.value)>5, gene,""),colour = "red",fontface="bold"))
+print(plot_cluster5_ALS)
+ggsave(filename = "results/microgliaCluster5/cluster5_ALS_signed.value.pdf", plot = plot_cluster5_ALS)
+write.table(cluster5_ALS.merged, "results/microgliaCluster5/cluster5_ALS_signed.value.txt", quote = F, row.names = F, sep = '\t')
+
+
 ```
+
 #### comparing top markers in Arf1-WT to aging deg markers
 ```{r}
-ggsave(filename = "results/microgliaMarker/microglia.cluster5.top10.markers_aging_signed.value.pdf",
-    ggplot(Arf1_WT_aging.merged, aes(x = Arf1_WT.signed.value,y = aging.signed.value)) + geom_point(alpha=0.5, color=ifelse(Arf1_WT_aging.merged$gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene,"red", "darkgrey"))+
+aging = aging[which(aging$gene%in%intersect(aging$gene, cluster5.signed$gene)),]
+cluster5.signed_select = cluster5.signed[which(cluster5.signed$gene%in%intersect(aging$gene, cluster5.signed$gene)),]
+cluster5.signed_aging.merged = merge(cluster5.signed_select, aging, by="gene")
+cluster5.signed_aging.merged = cluster5.signed_aging.merged[,c("gene","cluster5_all.signed.value","aging.signed.value")]
+
+plot_cluster5_aging = 
+ggplot(cluster5.signed_aging.merged, aes(x = cluster5_all.signed.value,y = aging.signed.value)) + geom_point(alpha=0.5)+
          geom_vline(xintercept = 0, linetype="dashed", color = "red")+
          geom_hline(yintercept = 0, linetype="dashed", color = "red")+
     theme(legend.position = "none", axis.text.x = element_text(size = 10),
           axis.text.y = element_text(size=10))+
-  geom_text_repel(size=4.5, aes(label= ifelse(gene%in%top_n(x = microgliaReshape.markers.cluster5,n = 10,wt = avg_logFC)$gene, gene,""),colour = "red",fontface="bold"))
-)
+  geom_text_repel(size=4.5, aes(label= ifelse(abs(cluster5_all.signed.value)>15&abs(aging.signed.value)>3, gene,""),colour = "red",fontface="bold"))
+
+print(plot_cluster5_aging)
+
+ggsave(filename = "results/microgliaCluster5/plot_cluster5_aging_signed.value.pdf", plot = plot_aging)
+write.table(cluster5.signed_aging.merged, "results/microgliaCluster5/plot_cluster5_aging_signed.value.txt", quote = F, row.names = F, sep = '\t')
 ```
 
 #### Find markers cluster5-cluster1 
@@ -701,6 +789,7 @@ markers.cluster5_cluster1 =
 FindMarkers(microglia.mainSubset, ident.1=5, ident.2=1,test.use="MAST", logfc.threshold = 0.05, min.pct = 0.05)
 write.table(markers.cluster5_cluster1, "results/microgliaCluster5/degs.cluster5-cluster1.txt", quote = F,row.names = T, sep = '\t', col.names=NA)
 ```
+
 ```{r}
 markers.cluster5_cluster1 = read.table("results/microgliaCluster5/degs.cluster5-cluster1.txt",header = T)
 markers.cluster5_cluster1$gene = rownames(markers.cluster5_cluster1)
@@ -717,6 +806,7 @@ select1 = c("leukocyte migration","tumor necrosis factor production","cytokine-m
 
 myCluster5_selectORA = myCluster5_cluster1_deg_ORA[which(myCluster5_cluster1_deg_ORA@result$Description%in%select1),asis=T]
 
+ggsave(filename = "results/microgliaCluster5/")
 dotplot(myCluster5_cluster1_deg_ORA)
 dotplot(myCluster5_selectORA)
 
@@ -777,7 +867,9 @@ disease.markers%in%rownames(IFNg_cluster5_cluster1)
 
 Idents(microgliaReshape)="new_clusters"
 WT_cluster5_cluster1 = FindMarkers(microgliaReshape[, which(microgliaReshape$SampleName=="WT")], ident.1 = 5, ident.2=1, test.use = "MAST",logfc.threshold = 0.5, min.pct = 0.25)
+View(WT_cluster5_cluster1)
 Arf1_cluster5_cluster1 = FindMarkers(microgliaReshape[, which(microgliaReshape$SampleName=="Arf1_KO")], ident.1 = 5, ident.2=1, test.use = "MAST",logfc.threshold = 0.5, min.pct = 0.25)
+View(Arf1_cluster5_cluster1)
 Arf1_IFNg_cluster5_cluster1 = FindMarkers(microgliaReshape[, which(microgliaReshape$SampleName=="Arf1_IFNg_KO")], ident.1 = 5, ident.2=1, test.use = "MAST",logfc.threshold = 0.5, min.pct = 0.25)
 IFNg_cluster5_cluster1 = FindMarkers(microgliaReshape[, which(microgliaReshape$SampleName=="IFNg_KO")], ident.1 = 5, ident.2=1, test.use = "MAST",logfc.threshold = 0.5, min.pct = 0.25)
 
@@ -1076,23 +1168,6 @@ get_heatmap(seuratobj = microgliaReshape,features = Arf1_vs_WT_top150, file.name
 ```{r}
 pdf("results/heatmaps/microglia_Arf1_vs_WT_allcells_top5.pdf")
 DoHeatmap(object = microgliaReshape, features = as.character(Arf1_vs_WT_top5), group.by = "Sample")
-dev.off()
-```
-
-#### microglia markers for each cluster, top 10 marker by average logFC or by p_val_adj displayed. 
-### computationally intensive. Ran on biowulf 
-```{r fig.height=5, fig.width=6}
-# calculate microglia markers for each cluster
-microgliaReshape.markers <- FindAllMarkers(microgliaReshape, only.pos = F, min.pct = 0.25, logfc.threshold = 0.25)
-dir.create("results/microglia.markers.for.each.cluster")
-write.table(microgliaReshape.markers, "results/microgliaMarker/microgliaReshape.markers_for.each.cluster.txt", quote = F, row.names = T, sep = '\t', col.names = NA)
-
-Idents(microgliaReshape) = "new_clusters"
-top10 <- microgliaReshape.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
-microgliaReshape.markers_for.each.cluster_avg_logFC_top10 = 
-DoHeatmap(microgliaReshape, features = top10$gene) + NoLegend()
-pdf("results/microgliaMarker/microgliaReshape.markers_for.each.cluster_avg_logFC_top10.pdf", height = 14, width = 17)
-microgliaReshape.markers_for.each.cluster_avg_logFC_top10
 dev.off()
 ```
 
