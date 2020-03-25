@@ -567,13 +567,13 @@ myChisq
 #### create volcano plots for sample level or cluster level deg
 ```{r}
 #function to take in a deg table and create a volcano at sample level
-myVolcano = function(file,contrast, dir){
+myVolcano = function(file,contrast, dir, logFC.cutoff){
   deg = read.table(paste0("results/", dir,"/", file), header = T, stringsAsFactors = F)
   deg$p_val_adj = ifelse(deg$p_val_adj==0, 5e-324, deg$p_val_adj)
-  deg.sig = deg[which(deg$p_val_adj<0.05&abs(deg$avg_logFC)>0.2),]
+  deg.sig = deg[which(deg$p_val_adj<0.05&abs(deg$avg_logFC)>logFC.cutoff),]
   write.table(deg.sig, paste0("results/", dir, "/", contrast, "_degs_sig",".txt"), quote = F, sep = "\t")
   
-  deg$significance = ifelse(deg$p_val_adj<0.05&abs(deg$avg_logFC)>0.2, "sig", "ns")
+  deg$significance = ifelse(deg$p_val_adj<0.05&abs(deg$avg_logFC)>logFC.cutoff, "sig", "ns")
   deg$gene = rownames(deg)
   volcanoPlot =
     ggplot(deg, aes(x=avg_logFC, y=-log(p_val_adj, 10))) +
@@ -592,12 +592,12 @@ myVolcano = function(file,contrast, dir){
 ```
 
 ```{r}
-myVolcano(file = "Arf1_WT_degs.txt", dir = "microglia_Arf1_vs_WT", contrast = "Arf1-WT")
-myVolcano(file = "IFNg_WT_degs.txt", dir = "microglia_IFNg_vs_WT", contrast = "IFNg-WT")
-myVolcano(file = "Arf1_IFNg_WT_degs.txt", dir = "microglia_Arf1_IFNg_vs_WT", contrast = "Arf1_IFNg-WT")
-myVolcano(file = "Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_IFNg", contrast = "Arf1-IFNg")
-myVolcano(file = "Arf1_Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_Arf1_IFNg", contrast = "Arf1-Arf1_IFNg")
-myVolcano(file = "degs.cluster5-cluster1.txt", dir = "microgliaCluster5", contrast = "cluster5-cluster1")
+myVolcano(file = "Arf1_WT_degs.txt", dir = "microglia_Arf1_vs_WT", contrast = "Arf1-WT",logFC.cutoff=0.2)
+myVolcano(file = "IFNg_WT_degs.txt", dir = "microglia_IFNg_vs_WT", contrast = "IFNg-WT",logFC.cutoff=0.2)
+myVolcano(file = "Arf1_IFNg_WT_degs.txt", dir = "microglia_Arf1_IFNg_vs_WT", contrast = "Arf1_IFNg-WT",logFC.cutoff=0.2)
+myVolcano(file = "Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_IFNg", contrast = "Arf1-IFNg",logFC.cutoff=0.2)
+myVolcano(file = "Arf1_Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_Arf1_IFNg", contrast = "Arf1-Arf1_IFNg",logFC.cutoff=0.2)
+myVolcano(file = "degs.cluster5-cluster1.txt", dir = "microgliaCluster5", contrast = "cluster5-cluster1",logFC.cutoff=0.5)
 
 ```
 
