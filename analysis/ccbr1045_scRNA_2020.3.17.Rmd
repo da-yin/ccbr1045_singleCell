@@ -231,8 +231,20 @@ ggsave(filename = "results/umaps/umap_seurat_clusters_microglia_merged.pdf", plo
 ```{r}
 df_microgliaReshape =
 as.data.frame(table(microgliaReshape$new_clusters, microgliaReshape$SampleName))
+sum(df_microgliaReshape$Freq)
 
 df_microgliaReshape_wide = spread(df_microgliaReshape, Var2, Freq)
+
+a=sum(df_microgliaReshape_wide[1:5,]$Arf1_IFNg_KO)
+b=sum(df_microgliaReshape_wide[1:5,]$Arf1_KO)
+c=sum(df_microgliaReshape_wide[1:5,]$IFNg_KO)
+d=sum(df_microgliaReshape_wide[1:5,]$WT)
+
+a1=sum(df_microgliaReshape_wide$Arf1_IFNg_KO)
+b1=sum(df_microgliaReshape_wide$Arf1_KO)
+c1=sum(df_microgliaReshape_wide$IFNg_KO)
+d1=sum(df_microgliaReshape_wide$WT)
+print(paste("cluster1,2,3,4 and 5 accounts for ",(a+b+c+d)/(a1+b1+c1+d1)))
 colnames(df_microgliaReshape_wide)[1]= "microglia_cluster"
 df_microgliaReshape_wide$microglia_cluster = as.character(df_microgliaReshape_wide$microglia_cluster)
 df_microgliaReshape_wide[nrow(df_microgliaReshape_wide)+1,]=c("total", colSums(df_microgliaReshape_wide[2:ncol(df_microgliaReshape_wide)]))
@@ -552,13 +564,15 @@ myChisq
 ```
 
 
-#### create volcano plots for sample level deg
+#### create volcano plots for sample level or cluster level deg
 ```{r}
 #function to take in a deg table and create a volcano at sample level
 myVolcano = function(file,contrast, dir){
   deg = read.table(paste0("results/", dir,"/", file), header = T, stringsAsFactors = F)
   deg$p_val_adj = ifelse(deg$p_val_adj==0, 5e-324, deg$p_val_adj)
-  deg.sig = deg[which(deg$p_val_adj<0.05),]
+  deg.sig = deg[which(deg$p_val_adj<0.05&abs(deg$avg_logFC)>0.2),]
+  write.table(deg.sig, paste0("results/", dir, "/", contrast, "_degs_sig",".txt"), quote = F, sep = "\t")
+  
   deg$significance = ifelse(deg$p_val_adj<0.05&abs(deg$avg_logFC)>0.2, "sig", "ns")
   deg$gene = rownames(deg)
   volcanoPlot =
@@ -583,6 +597,8 @@ myVolcano(file = "IFNg_WT_degs.txt", dir = "microglia_IFNg_vs_WT", contrast = "I
 myVolcano(file = "Arf1_IFNg_WT_degs.txt", dir = "microglia_Arf1_IFNg_vs_WT", contrast = "Arf1_IFNg-WT")
 myVolcano(file = "Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_IFNg", contrast = "Arf1-IFNg")
 myVolcano(file = "Arf1_Arf1_IFNg_degs.txt", dir = "microglia_Arf1_vs_Arf1_IFNg", contrast = "Arf1-Arf1_IFNg")
+myVolcano(file = "degs.cluster5-cluster1.txt", dir = "microgliaCluster5", contrast = "cluster5-cluster1")
+
 ```
 
 ## comparing top markers in this study to those found in other neurodegenerative diseases studies using Signed value
@@ -923,25 +939,25 @@ ALS_DAM_up.regulated.genes_allClusters = microgliaReshape_new_clusters_avergeExp
 
 abc = c(0,0,0.09,0.28,0.54)
 
-myComplexHeatmap = function(mat, width, vec){
+myComplexHeatmap = function(mat, width){
   col_fun = colorRamp2(c(0, 5), c("white", "blue"))
-  column_ha = HeatmapAnnotation(up = vec, ratio = anno_barplot(vec), col = list(foo = col_fun))
+  #column_ha = HeatmapAnnotation(up = vec, ratio = anno_barplot(vec), col = list(foo = col_fun))
   plot=
         ComplexHeatmap::Heatmap(matrix = t(scale(t(mat))), name="Z-score", km=1, 
                         col=colorRampPalette(rev(brewer.pal(n = 7, name ="RdYlBu")))(100), row_names_gp = gpar(fontsize = 9, fontface = "bold"),
                         column_names_gp = gpar(fontsize = 12, fontface = "bold"),
                         cluster_columns = T, column_title = "cluster", column_title_gp = gpar(fontsize = 15, fontface = "bold"), 
-                        column_title_side = "bottom", column_names_rot = 0, top_annotation = column_ha, width = width) 
+                        column_title_side = "bottom", column_names_rot = 0, width = width) # top_annotation = column_ha
   pdf(file = paste0("results/heatmaps/", deparse(substitute(mat)), ".pdf"))
   print(plot)
   dev.off()
   print(plot)
 }
 
-myComplexHeatmap(mat = ALS_DAM_down.regulated.genes_5Clusters, width = unit(5, "cm"), vec=df_disease_down$df_disease_down[c(1,2,3,4,5)])
-myComplexHeatmap(mat = ALS_DAM_down.regulated.genes_allClusters, width = unit(10, "cm"), vec=df.up.down$down.ratio)
-myComplexHeatmap(mat = ALS_DAM_up.regulated.genes_5Clusters, width = unit(5, "cm"), vec=df_disease_up$df_disease_up[c(1,2,3,4,5)])
-myComplexHeatmap(mat = ALS_DAM_up.regulated.genes_allClusters, width = unit(10, "cm"), vec=df_disease_up$df_disease_up)
+myComplexHeatmap(mat = ALS_DAM_down.regulated.genes_5Clusters, width = unit(5, "cm"))
+myComplexHeatmap(mat = ALS_DAM_down.regulated.genes_allClusters, width = unit(10, "cm"))#vec=df.up.down$down.ratio
+myComplexHeatmap(mat = ALS_DAM_up.regulated.genes_5Clusters, width = unit(5, "cm"))
+myComplexHeatmap(mat = ALS_DAM_up.regulated.genes_allClusters, width = unit(10, "cm"))
 
 bc = df_disease_ratios$disease.ratios[c(12,11,1,2,3,4,5,6,7,8,9,10)]
 df_disease_ratios$disease.ratios[c(1,9,11,10,12,2,6,7,3,4,8,5)]
@@ -950,8 +966,14 @@ class(abc)
 df_disease_ratios
 
 ALS_DAM.sig.down
+```
 
-microgliaReshape.markers.sig = microgliaReshape.markers[which(microgliaReshape.markers$p_val_adj<0.05 & abs(microgliaReshape.markers$avg_logFC)>0.35),] 
+
+# Fisher’s exact test showed a significant over-representation of genes associated with diseases for cluster3, 4, 5, and 7
+
+we obtained commonly differentially expressed genes in the ALS and AD study. There are 46 up-regulated genes that include some well-known disease risk factor such as Apoe, Spp1, Cd63. Similarly there are 22 down-regulated genes that include gene such as P2ry12, Tmem119 etc. We asked what fraction of these up-regulated and down-regulated genes are also concordantly up-regulated and down-regulated in the differentially expressed genes for each microglia cluster compared to rest of the clusters. Fisher’s exact test showed a significant over-representation of genes associated with diseases for cluster3, 4, 5, and 7. Among these cluster 4 and 5 have very high fractions at 0.33 and 0.43. 
+```{r}
+microgliaReshape.markers.sig = microgliaReshape.markers[which(microgliaReshape.markers$p_val_adj<0.05 & abs(microgliaReshape.markers$avg_logFC)>0.5),] 
 #microgliaReshape.markers.sig = microgliaReshape.markers[which(microgliaReshape.markers$p_val_adj<0.05),] 
 
 microgliaReshape.markers.sig.up = microgliaReshape.markers.sig[which(microgliaReshape.markers.sig$avg_logFC>0),]
@@ -981,20 +1003,56 @@ for (i in 1:12){
 
 
 df.up.down$up.number = unlist(up.number)
-df.up.down$up.ratio = df.up.down$up.number/length(ALS_DAM.sig.up)
+#df.up.down$up.ratio = df.up.down$up.number/length(ALS_DAM.sig.up)
 df.up.down$down.number = unlist(down.number)
-df.up.down$down.ratio = df.up.down$down.number/length(ALS_DAM.sig.down)
+#df.up.down$down.ratio = df.up.down$down.number/length(ALS_DAM.sig.down)
+df.up.down$up.down.total = df.up.down$up.number + df.up.down$down.number
+df.up.down$deg.sig = table(microgliaReshape.markers.sig$cluster) %>% unlist() %>% as.integer() # total number of sig degs in each cluster
+df.up.down$up.down.in.background = as.integer(unlist(table(ALS_DAM.sig.up%in%rownames(microgliaReshape)))) + as.integer(unlist(table(ALS_DAM.sig.down%in%rownames(microgliaReshape)))) 
+df.up.down$backgound = length(rownames(microgliaReshape))
 
 df.up.down
-table(microgliaReshape.markers.sig$cluster)
+table(microgliaReshape.markers.sig$cluster) %>% unlist()
 
-table(ALS_DAM.sig.up%in%rownames(microgliaReshape))
+as.integer(unlist(table(ALS_DAM.sig.up%in%rownames(microgliaReshape)))) + as.integer(unlist(table(ALS_DAM.sig.down%in%rownames(microgliaReshape)))) 
 length(rownames(microgliaReshape))
+
+
+fisherTable = list()
+fisherRes = list()
+fisher.p.value = list()
+for (i in 1:12) {
+fisherTable[[i]] = data.frame(deg = c(df.up.down[i,]$up.down.total, df.up.down[i,]$deg.sig), backgound = c(df.up.down[i,]$up.down.in.background, df.up.down[i,]$backgound))
+fisher.p.value[[i]] = fisher.test(fisherTable[[i]])$p.value
+}
+
+df.up.down$fisher.p = round(as.numeric(unlist(fisher.p.value)),digits = 5)
+df.up.down$up.down.total.fraction = df.up.down$up.down.total/df.up.down$deg.sig
+df.up.down$unchanged.fraction = 1 - df.up.down$up.down.total/df.up.down$deg.sig
+
+write.csv(df.up.down, "results/microgliaMarker/fisher.test_disease.fraction_for_each_cluster.csv", quote = F)
+
+
+df.table = df.up.down[,c("cluster", "up.down.total.fraction", "unchanged.fraction")]
+df.table.long = melt(df.table)
+
+
+
+
+ggplot(data = df.table.long, aes(x = cluster, y = value, fill = variable)) + geom_bar(stat = "identity", width = 0.7,position = position_fill(reverse = TRUE)) + scale_fill_manual(values=c("#E69F00","#999999"), labels=c("disease associated", "not disease associated"), name="DEGs") +
+    theme(legend.position = "top", axis.text = element_text(face="bold"))  + ylab("fraction")
 
 ```
 
 ```{r}
+dat = data.frame(nonsmoker = c(7,0), smoker=c(2,5))
+rownames(dat) = c("athelete", "non-athelete")
+```
 
+```{r}
+chisq.test(dat)
+test  = fisher.test(dat)
+test$p.value
 ```
 
 
@@ -1030,6 +1088,8 @@ myCluster5_selectORA2 = myCluster5_cluster1_deg_ORA[which(myCluster5_cluster1_de
 
 
 ggsave(filename = "results/microgliaCluster5/cluster5_cluster1_ORA.pdf", plot = dotplot(myCluster5_selectORA2,showCategory = 18))
+
+dotplot(myCluster5_selectORA2,showCategory = 18, split=".sign")+ facet_grid(.~.sign)
 
 lfc = markers.cluster5_cluster1.sig[,c("avg_logFC")]
 fc = 2^lfc
@@ -1306,17 +1366,17 @@ myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "Arf1_IFNg
 ```
 
 ```{r}
-dir.create("results/microgliaCluster_IFNg_vs_WT/")
+dir.create("results/microglia_IFNg_vs_WT/")
 for (clusterNumber in 0:13){
 myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "IFNg_KO.h5",identity2 = "WT.h5")
 }
-file.move(list.files(pattern = "cluster"), "results/microgliaCluster_IFNg_vs_WT/")
+file.move(list.files(pattern = "cluster"), "results/microglia_IFNg_vs_WT/")
 ```
 
 Reading in allArf1_KO.h5-WT.h5 volcanos to create a new plot with grid.arrange
 ```{r}
 #combine all volcanos into one figure for presentation
-rl = lapply(sprintf("results/microgliaCluster_Arf1_vs_WT/cluster%i_Arf1_KO.h5-WT.h5.png", 0:13), png::readPNG)
+rl = lapply(sprintf("results/microglia_Arf1_vs_WT/cluster%i_Arf1_KO.h5-WT.h5.png", 0:13), png::readPNG)
 gl = lapply(rl, grid::rasterGrob)
 gridExtra::grid.arrange(grobs=gl)
 
@@ -1419,6 +1479,14 @@ Microglia.Markers_Arf1_all = union(union(Microglia.Markers_Arf1_Arf1.IFNg.top$ge
 
 ```
 
+# sig degs for every sample
+```{r}
+aaa = read.table("results/microglia_Arf1_vs_WT/Arf1_WT_degs.txt", header = T)
+aaa.sig = aaa[which(aaa$p_val_adj<0.05&abs(aaa$avg_logFC)>0.2),]
+write.table(aaa.sig, "results/microglia_Arf1_vs_WT/Arf1_WT_degs_sig.txt", quote = F)
+
+```
+
 
 #### use average expression of the cells for heatmap
 ```{r fig.height=3, fig.width=4}
@@ -1500,24 +1568,24 @@ dotplot(myBP_ORAs)
 
 #### function to generate ORA for every cluster
 ```{r}
-microgliaCluster_Arf1_vs_WT = list.files("results/microgliaCluster_Arf1_vs_WT/", pattern = "sig")
+microglia_Arf1_vs_WT = list.files("results/microglia_Arf1_vs_WT/", pattern = "sig")
 Arf1_vs_WT = list()
 Arf1_vs_WT_table = list()
 Arf1_vs_WT_avg_logFC = list()
 Arf1_vs_WT_FC = list()
-for (i in microgliaCluster_Arf1_vs_WT){
-  Arf1_vs_WT[[i]] = read.table(paste("results/microgliaCluster_Arf1_vs_WT/", i, sep = "/"), header = T, sep = '\t')
+for (i in microglia_Arf1_vs_WT){
+  Arf1_vs_WT[[i]] = read.table(paste("results/microglia_Arf1_vs_WT/", i, sep = "/"), header = T, sep = '\t')
   Arf1_vs_WT[[i]] = Arf1_vs_WT[[i]]$X
-  Arf1_vs_WT_table[[i]] = read.table(paste("results/microgliaCluster_Arf1_vs_WT/", i, sep = "/"), header = T, sep = '\t', row.names = 1)
+  Arf1_vs_WT_table[[i]] = read.table(paste("results/microglia_Arf1_vs_WT/", i, sep = "/"), header = T, sep = '\t', row.names = 1)
   Arf1_vs_WT_avg_logFC[[i]] = Arf1_vs_WT_table[[i]][,c("avg_logFC")]
   names(Arf1_vs_WT_avg_logFC[[i]]) = rownames(Arf1_vs_WT_table[[i]])
   Arf1_vs_WT_FC[[i]] = 2^Arf1_vs_WT_avg_logFC[[i]]
   names(Arf1_vs_WT_FC[[i]]) = rownames(Arf1_vs_WT_table[[i]])
   
 }
-names(Arf1_vs_WT)= stringr::str_replace(microgliaCluster_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
-names(Arf1_vs_WT_FC)= stringr::str_replace(microgliaCluster_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
-names(Arf1_vs_WT_avg_logFC)= stringr::str_replace(microgliaCluster_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
+names(Arf1_vs_WT)= stringr::str_replace(microglia_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
+names(Arf1_vs_WT_FC)= stringr::str_replace(microglia_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
+names(Arf1_vs_WT_avg_logFC)= stringr::str_replace(microglia_Arf1_vs_WT, pattern = "_Arf1_KO.h5-WT.h5_sig.txt", replacement = "")
 ```
 
 #### function to generate ORA for every cluster
@@ -1546,7 +1614,7 @@ mmm = myBP_ORAs[["cluster2"]][which(myBP_ORAs[["cluster2"]]@result$Description%i
 kkk= filter(myBP_ORAs[["cluster2"]], Description%in%c("regulation of lipid metabolic process", "positive regulation of steroid metabolic process", "negative regulation of lipid metabolic process", "regulation of lipid biosynthetic process", "lipid storage", "positive regulation of lipid localization", "lipid localization","glycolipid catabolic process","glycosphingolipid catabolic process","protein-lipid complex subunit organization","cellular response to lipid"))
 
 
-Arf1_vs_WT_test = read.table(paste("results/microgliaCluster_Arf1_vs_WT/cluster2_Arf1_KO.h5-WT.h5_sig.txt", sep = "/"), header = T, sep = '\t', row.names = 1)
+Arf1_vs_WT_test = read.table(paste("results/microglia_Arf1_vs_WT/cluster2_Arf1_KO.h5-WT.h5_sig.txt", sep = "/"), header = T, sep = '\t', row.names = 1)
 Arf1_vs_WT_log2fc = Arf1_vs_WT_test[,c("avg_logFC")]
 Arf1_vs_WT_fc = 2^Arf1_vs_WT_log2fc
 
@@ -1657,38 +1725,60 @@ dotplot(myBP_ORAs_markers.cluster5)
 
 
 ```{r fig.height=3, fig.width=6}
-myORA(contrast = "Arf1-WT",geneList = get_geneList(dir = "results/microgliaCluster_Arf1_vs_WT/", listName = Arf1_vs_WT))
+myORA(contrast = "Arf1-WT",geneList = get_geneList(dir = "results/microglia_Arf1_vs_WT/", listName = Arf1_vs_WT))
 ```
 
 
 ```{r fig.height=3, fig.width=6}
-myORA(contrast = "Arf1-Arf1_IFNg",geneList = get_geneList(dir = "results/microgliaCluster_Arf1_vs_Arf1_IFNg/", listName = Arf1_vs_Arf1_IFNg))
+myORA(contrast = "Arf1-Arf1_IFNg",geneList = get_geneList(dir = "results/microglia_Arf1_vs_Arf1_IFNg/", listName = Arf1_vs_Arf1_IFNg))
 ```
 
 
 ```{r fig.height=3, fig.width=6}
-myORA(contrast = "Arf1-IFNg",geneList = get_geneList(dir = "results/microgliaCluster_Arf1_vs_IFNg/", listName = Arf1_vs_IFNg))
+myORA(contrast = "Arf1-IFNg",geneList = get_geneList(dir = "results/microglia_Arf1_vs_IFNg/", listName = Arf1_vs_IFNg))
 
 ```
 
 
 ```{r fig.height=3, fig.width=6}
-myORA(contrast = "Arf1_IFNg-WT",geneList = get_geneList(dir = "results/microgliaCluster_Arf1_IFNg_vs_WT/", listName = Arf1_IFNg_vs_WT))
+myORA(contrast = "Arf1_IFNg-WT",geneList = get_geneList(dir = "results/microglia_Arf1_IFNg_vs_WT/", listName = Arf1_IFNg_vs_WT))
 ```
 
 
 ```{r fig.height=3, fig.width=6}
-myORA(contrast = "IFNg-WT",geneList = get_geneList(dir = "results/microgliaCluster_IFNg_vs_WT/", listName = IFNg_vs_WT))
+myORA(contrast = "IFNg-WT",geneList = get_geneList(dir = "results/microglia_IFNg_vs_WT/", listName = IFNg_vs_WT))
+```
+
+```{r}
+#function to look into the DEG folder, find the significant genes(files), then get the gene names for searching for over-represented pathways using clusterprofiler
+get_geneList = function(dir, listName){
+  myfiles = list.files(dir, pattern = "sig.txt")
+  listName = list()
+  for (i in myfiles){
+    listName[[i]] = read.table(paste(dir, i, sep = "/"), header = T, sep = '\t')
+    listName[[i]] = listName[[i]]$X
+  }
+  names(listName) = gsub("\\_.*","",myfiles)
+  return(listName)
+}
 ```
 
 
 ```{r}
+dir = "results/microglia_Arf1_vs_WT/"
+myfiles = list.files(dir, pattern = "sig.txt")
+```
+
+
+```{r}
+aaaa= get_geneList(dir = "results/microglia_Arf1_vs_WT/", listName = Arf1_vs_WT)
+
 Arf1_vs_WT_deg_df =
-get_geneList(dir = "results/microgliaCluster_Arf1_vs_WT/", listName = Arf1_vs_WT)%>% unlist() %>%table() %>% as.data.frame() 
+get_geneList(dir = "results/microglia_Arf1_vs_WT/", listName = Arf1_vs_WT)%>% unlist() %>%table() %>% as.data.frame() 
 colnames(Arf1_vs_WT_deg_df)[1] = "genes"
 Arf1_vs_WT_deg_df = Arf1_vs_WT_deg_df[order(Arf1_vs_WT_deg_df$Freq, decreasing = T),]
 View(Arf1_vs_WT_deg_df)
-Arf1_vs_WT_degTables = get_degTable(dir = "results/microgliaCluster_Arf1_vs_WT/", listName = Arf1_vs_WT)
+Arf1_vs_WT_degTables = get_degTable(dir = "results/microglia_Arf1_vs_WT/", listName = Arf1_vs_WT)
 Arf1_vs_WT_deg_genes = AverageExpression(microgliaReshape, features = Arf1_vs_WT_deg_df$genes, assays = "SCT")
 Arf1_vs_WT_deg_genes = data.frame(Arf1_vs_WT_deg_genes$SCT)
 Arf1_vs_WT_deg_genes$regulation = ifelse(Arf1_vs_WT_deg_genes$Arf1_KO.h5<Arf1_vs_WT_deg_genes$WT.h5, "down-regulated", "up-regulated")
