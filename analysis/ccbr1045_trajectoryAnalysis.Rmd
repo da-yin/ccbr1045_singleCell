@@ -1,0 +1,295 @@
+---
+title: "ccbr1045_trajectoryAnalysis"
+author: "Da"
+date: "4/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### y_x.rds_1.2_tabulaMuris2020.3.4.rds is the four sample merged seurat object with added tabula Muris cell identity annotation
+```{r}
+setwd("~/Desktop/active_projects/ccbr1045/") 
+#original data source: biowulf /data/CCBR/projects/ccbr1045/scrna_guohao2/SingleR_testing/y_x.rds_1.2_tabulaMuris2020.3.4.rds
+y_x.rds_1.2 = readRDS("~/Desktop/active_projects/seuratObject/y_x.rds_1.2_tabulaMuris2020.3.4.rds")
+#original data source: biowulf /data/CCBR/projects/ccbr1045/scrna_guohao2/integration/merged/y-x/microgliaReshape.rds
+microgliaReshape = readRDS("~/Desktop/active_projects/seuratObject/microgliaReshape.rds")
+
+save.image(file = "monocle.RData")
+```
+
+#### subset samples and clusters
+```{r}
+microglia_Arf1 = subset(x = microgliaReshape, cells = which(microgliaReshape$SampleName=="Arf1_KO"&microgliaReshape$new_clusters%in%c(1,2,3,4,5,6,7,8,9,10,11,12)))
+
+
+
+microglia_Arf1_main = subset(x = microgliaReshape, cells = which(microgliaReshape$SampleName=="Arf1_KO"&microgliaReshape$new_clusters%in%c(1,2,3,4,5)))
+
+microglia_WT_main = subset(x = microgliaReshape, cells = which(microgliaReshape$SampleName=="WT"&microgliaReshape$new_clusters%in%c(1,2,3,4,5)))
+
+
+microglia_Arf1_IFNg_main = subset(x = microgliaReshape, cells = which(microgliaReshape$SampleName=="Arf1_IFNg_KO"&microgliaReshape$new_clusters%in%c(1,2,3,4,5)))
+
+
+microglia_IFNg_main = subset(x = microgliaReshape, cells = which(microgliaReshape$SampleName=="IFNg_KO"&microgliaReshape$new_clusters%in%c(1,2,3,4,5)))
+
+
+microglia_Arf1_main2 = subset(x = microgliaReshape, cells = which(microgliaReshape$SampleName=="Arf1_KO"&microgliaReshape$new_clusters%in%c(1,2,4,5)))
+microglia_Arf1_main2@meta.data
+```
+
+#### function for pre-processing, reduce dimensionality, clustering for monocle
+```{r}
+myTrajectory = function(so){
+  data = as(as.matrix(so@assays$RNA@counts), 'sparseMatrix')
+  pd <- new('AnnotatedDataFrame', data = so@meta.data)
+  fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+  fd <- new('AnnotatedDataFrame', data = fData)
+  my_cds <- newCellDataSet(data,
+                              phenoData = pd,
+                              featureData = fd,
+                              lowerDetectionLimit = 0.5,
+                              expressionFamily = negbinomial.size())
+  my_cds <- estimateSizeFactors(my_cds)
+  my_cds <- estimateDispersions(my_cds)
+  my_cds <- detectGenes(my_cds, min_expr = 0.1)
+  pData(my_cds)$UMI <- Matrix::colSums(exprs(my_cds))
+  disp_table <- dispersionTable(my_cds)
+  table(disp_table$mean_expression>=0.1)
+  unsup_clustering_genes <- subset(disp_table, mean_expression >= 0.1)
+  my_cds <- setOrderingFilter(my_cds, unsup_clustering_genes$gene_id)
+  
+  expressed_genes <- row.names(subset(fData(my_cds), num_cells_expressed >= 10))
+  my_cds_subset <- my_cds[expressed_genes, ]
+  
+  my_cds_subset <- detectGenes(my_cds_subset, min_expr = 0.1)
+  fData(my_cds_subset)$use_for_ordering <- fData(my_cds_subset)$num_cells_expressed > 0.05 * ncol(my_cds_subset)
+  table(fData(my_cds_subset)$use_for_ordering)
+  
+  #plot_pc_variance_explained(my_cds_subset, return_all = FALSE) # takes long time
+
+  my_cds_subset <- reduceDimension(my_cds_subset,max_components = 2,norm_method = 'log',num_dim = 10,
+                                   reduction_method ='tSNE',verbose = TRUE)
+  my_cds_subset <- clusterCells(my_cds_subset, verbose = FALSE)
+  plot_rho_delta(my_cds_subset, rho_threshold = 2, delta_threshold = 10)
+  my_cds_subset <- clusterCells(my_cds_subset,rho_threshold = 2,delta_threshold = 10,skip_rho_sigma = T,verbose = FALSE)
+  
+  clustering_DEG_genes <- differentialGeneTest(my_cds_subset,fullModelFormulaStr = '~Cluster',cores = 2)
+  
+  clustering_DEG_genes %>% arrange(qval) %>% head()
+  my_ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:1000]
+  my_cds_subset <- setOrderingFilter(my_cds_subset, ordering_genes = my_ordering_genes)
+  my_cds_subset <- reduceDimension(my_cds_subset, method = 'DDRTree')
+  my_cds_subset <- orderCells(my_cds_subset)
+  
+  plot_cell_trajectory(my_cds_subset, color_by = "new_clusters",cell_size = 1)
+  plot_cell_trajectory(my_cds_subset, color_by = "State",cell_size = 1)
+  
+  return(my_cds_subset)
+
+}
+```
+
+```{r}
+my_cds_subset_Arf1 = myTrajectory(so = microglia_Arf1)
+
+my_cds_subset_Arf1_main = myTrajectory(so = microglia_Arf1_main)
+
+```
+
+#### set the root state and order cells in pseudotime
+```{r}
+my_cds_subset_Arf1_main = myTrajectory(so = microglia_Arf1_main)
+
+plot_cell_trajectory(my_cds_subset_Arf1, color_by = "new_clusters",cell_size = 0.6 )
+plot_cell_trajectory(my_cds_subset_Arf1, color_by = "State",cell_size = 0.6)
+
+plot_cell_trajectory(my_cds_subset_Arf1_main, color_by = "new_clusters",cell_size = 0.6)
+plot_cell_trajectory(my_cds_subset_Arf1_main, color_by = "State",cell_size = 0.6)
+
+my_cds_subset_Arf1_main <- orderCells(my_cds_subset_Arf1_main,root_state=7)
+
+my_pseudotime_de_Arf1_main <- differentialGeneTest(my_cds_subset_Arf1_main,fullModelFormulaStr = "~sm.ns(Pseudotime)",cores = 2)
+
+my_pseudotime_de_Arf1_main %>% arrange(qval) %>% head()
+my_pseudotime_de_Arf1_main %>% arrange(qval) %>% head() %>% select(gene_short_name) -> my_pseudotime_gene_Arf1_main
+
+plot_cell_trajectory(my_cds_subset_Arf1_main, color_by = "Pseudotime",cell_size = 0.6)
+
+plot_cell_trajectory(my_cds_subset_Arf1_main, markers = "Apoe",use_color_gradient = T,cell_size = 0.6) +
+scale_color_gradient2(low="navy", mid="white", high="red", 
+                       midpoint=0)
+
+
+```
+
+#### set the root state and order cells in pseudotime
+
+```{r}
+my_cds_subset_WT_main = myTrajectory(so = microglia_WT_main)
+
+plot_cell_trajectory(my_cds_subset_WT_main, color_by = "new_clusters",cell_size = 0.6)
+plot_cell_trajectory(my_cds_subset_WT_main, color_by = "State",cell_size = 0.6)
+
+my_cds_subset_WT_main <- orderCells(my_cds_subset_WT_main,root_state=3)
+
+my_pseudotime_de_WT_main <- differentialGeneTest(my_cds_subset_WT_main,fullModelFormulaStr = "~sm.ns(Pseudotime)",cores = 2)
+
+my_pseudotime_de_WT_main %>% arrange(qval) %>% head()
+my_pseudotime_de_WT_main %>% arrange(qval) %>% head() %>% select(gene_short_name) -> my_pseudotime_gene_WT_main
+
+plot_cell_trajectory(my_cds_subset_WT_main, color_by = "Pseudotime",cell_size = 0.6)
+```
+
+#### set the root state and order cells in pseudotime
+```{r}
+my_cds_subset_Arf1_main2b = myTrajectory(so = microglia_Arf1_main2)
+plot_cell_trajectory(my_cds_subset_Arf1_main2b, color_by = "new_clusters",cell_size = 1)
+plot_cell_trajectory(my_cds_subset_Arf1_main2b, color_by = "State",cell_size = 1)
+
+my_cds_subset_Arf1_main2b <- orderCells(my_cds_subset_Arf1_main2b,root_state=2)
+
+my_pseudotime_de_Arf1_main2b <- differentialGeneTest(my_cds_subset_Arf1_main2b,fullModelFormulaStr = "~sm.ns(Pseudotime)",cores = 2)
+
+my_pseudotime_de_Arf1_main2b %>% arrange(qval) %>% head()
+my_pseudotime_de_Arf1_main2b %>% arrange(qval) %>% head() %>% select(gene_short_name) -> my_pseudotime_gene_Arf1_main2b
+
+plot_cell_trajectory(my_cds_subset_Arf1_main2b, color_by = "Pseudotime",cell_size = 1)
+
+```
+
+
+```{r}
+my_cds_subset_Arf1_main2 = myTrajectory(so = microglia_Arf1_main2)
+plot_cell_trajectory(my_cds_subset_Arf1_main2, color_by = "new_clusters",cell_size = 1)
+plot_cell_trajectory(my_cds_subset_Arf1_main2, color_by = "State",cell_size = 1)
+
+```
+
+
+```{r}
+data = as(as.matrix(microglia_Arf1_main@assays$RNA@counts), 'sparseMatrix')
+pd <- new('AnnotatedDataFrame', data = microglia_Arf1_main@meta.data)
+
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+my_cds <- newCellDataSet(data,
+                              phenoData = pd,
+                              featureData = fd,
+                              lowerDetectionLimit = 0.5,
+                              expressionFamily = negbinomial.size())
+
+my_cds <- estimateSizeFactors(my_cds)
+my_cds <- estimateDispersions(my_cds)
+my_cds <- detectGenes(my_cds, min_expr = 0.1)
+head(fData(my_cds))
+head(pData(my_cds))
+
+pData(my_cds)$UMI <- Matrix::colSums(exprs(my_cds))
+disp_table <- dispersionTable(my_cds)
+head(disp_table)
+
+table(disp_table$mean_expression>=0.1)
+unsup_clustering_genes <- subset(disp_table, mean_expression >= 0.1)
+my_cds <- setOrderingFilter(my_cds, unsup_clustering_genes$gene_id)
+plot_ordering_genes(my_cds)
+
+
+expressed_genes <- row.names(subset(fData(my_cds), num_cells_expressed >= 10))
+my_cds_subset <- my_cds[expressed_genes, ]
+my_cds_subset
+head(pData(my_cds_subset))
+
+
+my_cds_subset <- detectGenes(my_cds_subset, min_expr = 0.1)
+fData(my_cds_subset)$use_for_ordering <- fData(my_cds_subset)$num_cells_expressed > 0.05 * ncol(my_cds_subset)
+table(fData(my_cds_subset)$use_for_ordering)
+
+#plot_pc_variance_explained(my_cds_subset, return_all = FALSE) # takes long time
+
+my_cds_subset <- reduceDimension(my_cds_subset,max_components = 2,norm_method = 'log',num_dim = 10,reduction_method = 'tSNE',verbose = TRUE)
+my_cds_subset <- clusterCells(my_cds_subset, verbose = FALSE)
+plot_rho_delta(my_cds_subset, rho_threshold = 2, delta_threshold = 10)
+my_cds_subset <- clusterCells(my_cds_subset,rho_threshold = 2,delta_threshold = 10,skip_rho_sigma = T,verbose = FALSE)
+
+
+
+table(pData(my_cds_subset)$Cluster)
+plot_cell_clusters(my_cds_subset)
+head(pData(my_cds_subset))
+
+
+clustering_DEG_genes <- differentialGeneTest(my_cds_subset,fullModelFormulaStr = '~Cluster',cores = 12)
+dim(clustering_DEG_genes)
+```
+
+
+The single-cell trajectory reconstructed by Monocle 2 for Arf1_KO cells. Cells start at the root and progress to one of three alternative outcomes, denoted by 1, 2, and 3. To reach these fates, cells must pass through branch point 1. Cells that do not proceed to F1 must then choose between F2 or F3 at branch point B2.
+
+```{r}
+#saveRDS(object = my_cds_subset, file = "~/Desktop/active_projects/ccbr1045/my_cds_subset1.rds")
+
+clustering_DEG_genes %>% arrange(qval) %>% head()
+my_ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:1000]
+my_cds_subset <- setOrderingFilter(my_cds_subset, ordering_genes = my_ordering_genes)
+my_cds_subset <- reduceDimension(my_cds_subset, method = 'DDRTree')
+my_cds_subset <- orderCells(my_cds_subset)
+
+#saveRDS(object = my_cds_subset, file = "~/Desktop/active_projects/ccbr1045/my_cds_subset2.rds")
+
+#pseudotime trajectories calculated
+#plot_cell_trajectory(my_cds_subset, color_by = "SampleName")
+plot_cell_trajectory(my_cds_subset, color_by = "new_clusters",cell_size = 1)
+#plot_cell_trajectory(my_cds_subset, color_by = "orig.ident")
+head(pData(my_cds_subset))
+```
+
+```{r}
+#plot_cell_trajectory(my_cds_subset, color_by = "State",cell_size = 1)+ facet_wrap(~State, nrow = 1)
+plot_cell_trajectory(my_cds_subset, color_by = "State",cell_size = 1)
+```
+Since we don't have a timeseries, you need to set the root based on where certain marker genes are expressed, in this case, the homeostatic genes, cluster1 and cluster2, which corresponds to State 7. 
+```{r}
+#library(monocle)
+my_cds_subset <- orderCells(my_cds_subset,root_state=7)
+
+my_pseudotime_de <- differentialGeneTest(my_cds_subset,fullModelFormulaStr = "~sm.ns(Pseudotime)",cores = 2)
+
+my_pseudotime_de %>% arrange(qval) %>% head()
+my_pseudotime_de %>% arrange(qval) %>% head() %>% select(gene_short_name) -> my_pseudotime_gene
+
+plot_cell_trajectory(my_cds_subset, color_by = "Pseudotime",cell_size = 1)
+```
+
+
+
+
+```{r}
+#"A" stand for top 6 genes of affecting the fate decisions
+A=c("Rpl37a","Cst3","Rps21","Rpl39","P2ry12","Rps20")
+B=c("Apoe","Cst3","Tmem119","Spp1","P2ry12","Cx3cr1")
+my_pseudotime_gene <-B
+plot_genes_in_pseudotime(my_cds_subset[my_pseudotime_gene,], color_by = "new_clusters",cell_size = 0.3)
+
+plot_cells(my_cds_subset,
+           genes=A,
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+save.image(file = "monocle.RData")
+
+
+```
+
+
+```{r}
+#Calculate the heat map of the top 30 genes
+library(dplyr)
+my_pseudotime_de %>% arrange(qval) %>% head(50) %>% select(gene_short_name) -> gene_to_cluster
+gene_to_cluster <- gene_to_cluster$gene_short_name
+my_pseudotime_cluster <- plot_pseudotime_heatmap(my_cds_subset[gene_to_cluster,],num_clusters = 5,cores = 2,show_rownames = TRUE,return_heatmap = TRUE)
+
+```

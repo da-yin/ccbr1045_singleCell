@@ -70,7 +70,6 @@ library(MAST)
 library(dplyr)
 library(tidyverse)
 library(ggrepel)
-library(RColorBrewer)
 library(pheatmap)
 library(clusterProfiler)
 library(org.Mm.eg.db)
@@ -82,8 +81,10 @@ library(DT)
 library(forcats)
 library(readr)
 library(data.table)
+library(RColorBrewer)
 library(ComplexHeatmap)
 library(circlize)
+library(monocle)
 theme_set(theme_classic())
 ```
 
@@ -145,7 +146,10 @@ microgliaReshape = readRDS("~/Desktop/active_projects/seuratObject/microgliaResh
 p1 = 
 DimPlot(y_x.rds_1.2, reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,group.by="tabulaMuris")+ NoLegend()
 ggsave(filename = "results/umaps/tabulaMuris_allCellTypes_merged.pdf", plot = p1)
+DimPlot(y_x.rds_1.2, reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,group.by="mouseRNAseq_main")+ NoLegend()
+DimPlot(y_x.rds_1.2, reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,group.by="immgen_main")+ NoLegend()
 ```
+
 
 
 #### The composition of different cell identities. Microglia accounts for more than half.
@@ -357,6 +361,177 @@ plot_grid(myVlnPlot("P2ry12"),myVlnPlot("Cx3cr1"),myVlnPlot("Hexb"),
 plot_grid(myVlnPlot("Apoe"),myVlnPlot("Cd63"),myVlnPlot("Cxcl2"),myVlnPlot("Cd52"),
           myVlnPlot("Ctsb"),myVlnPlot("H2-D1"),myVlnPlot("Fth1"),myVlnPlot("Spp1"), ncol = 3)
 ```
+
+
+#### find out the disease markers
+```{r}
+ALS = read.csv("~/Desktop/active_projects/ccbr1045_singleCell/analysis/processedData/SOD1_Microglia_DEGs.csv", stringsAsFactors = F)
+ALS.sig.up = ALS[which(ALS$FDR<0.05&ALS$Fold.change.Mutant.Control>3),]
+ALS.sig.down = ALS[which(ALS$FDR<0.05&ALS$Fold.change.Mutant.Control< 0.8),]
+
+
+DAM = read.csv("~/Desktop/active_projects/ccbr1045_singleCell/analysis/processedData/suppData3_KerenShaul2017_DAM.csv", stringsAsFactors = F)
+colnames(DAM) = c("gene", "counts", "FC_DAM_homeostatic.microglia", "log10Pvalue", "FDR")
+DAM = DAM[!is.na(DAM$FC_DAM_homeostatic.microglia),]
+
+DAM$DAM.signed.value = sign(DAM$FC_DAM_homeostatic.microglia) * log2(abs(DAM$FC_DAM_homeostatic.microglia)) * DAM$log10Pvalue 
+DAM = DAM[,c(1,3,4,5,6)]
+DAM.sig.up = DAM[which(DAM$FDR>1.3&DAM$FC_DAM_homeostatic.microglia>3),]
+DAM.sig.down = DAM[which(DAM$FDR>1.3&DAM$FC_DAM_homeostatic.microglia< -3),]
+
+ALS_DAM.sig.up = intersect(ALS.sig.up$Official.Symbol, DAM.sig.up$gene)
+ALS_DAM.sig.up = ALS_DAM.sig.up[!ALS_DAM.sig.up%in%c("5430435G22Rik","Clec7a")]
+ALS_DAM.sig.down = intersect(ALS.sig.down$Official.Symbol, DAM.sig.down$gene)
+ALS_DAM.sig.up.down = union(ALS_DAM.sig.up,ALS_DAM.sig.down)
+```
+
+
+```{r}
+Idents(microgliaReshape) = "SampleName"
+
+disease_set1 = c("Apoe", "Cd63", "Cxcl2","Cd52","Ctsb","H2-D1","Fth1","Spp1")
+homeostatic_set1 = c("P2ry12", "Cx3cr1", "Hexb", "Tmem119","Olfml3","Siglech")
+
+microgliaReshape = AddModuleScore(object = microgliaReshape, 
+                                  features = disease_set1,
+                                  name = "DiseaseScore")
+
+microgliaReshape = AddModuleScore(object = microgliaReshape, 
+                                  features = homeostatic_set1,
+                                  name = "homeostaticScore")
+
+
+ALS_DAM.sig.up
+```
+
+
+```{r}
+m = paste0("homeostaticScore","1")
+        clusid = microgliaReshape@meta.data[[m]]
+        clusid = scales::rescale(microgliaReshape@meta.data[[m]], to=c(0,1))
+    
+        clus.quant=quantile(clusid[clusid>0],probs=c(.1,.5,.9))
+        midpt = clus.quant[2]
+        midpt2 = clus.quant[1]
+        midpt3 = clus.quant[3]
+        
+        clusid.df <- data.frame(id=microgliaReshape@meta.data$SampleName,score=microgliaReshape@meta.data[[m]])
+        clusid.df_WT_Arf1 = clusid.df[which(clusid.df$id%in%c("Arf1_KO","WT")),]
+        clusid.df_WT_IFNg = clusid.df[which(clusid.df$id%in%c("IFNg_KO","WT")),]
+        clusid.df_WT_Arf1_IFNg = clusid.df[which(clusid.df$id%in%c("Arf1_IFNg_KO","WT")),]
+        
+        ggplot(clusid.df_WT_Arf1,aes(x=score,fill=id)) +
+  geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)
+        ggplot(clusid.df_WT_IFNg,aes(x=score,fill=id)) +
+  geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)
+        ggplot(clusid.df_WT_Arf1_IFNg,aes(x=score,fill=id)) +
+  geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)
+        
+#         + geom_histogram(position="dodge",bins=100) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+# panel.background = element_blank(), legend.title = element_blank(), legend.text=element_text(size=rel(0.8)),legend.position="top" ) + guides(colour = guide_legend(override.aes = list(size=5, alpha = 1)))+
+#   geom_density(alpha=0.4)
+        
+        
+```
+
+```{r}
+
+m = paste0("homeostaticScore","1")
+        clusid = microgliaReshape@meta.data[[m]]
+        clusid = scales::rescale(microgliaReshape@meta.data[[m]], to=c(0,1))
+    
+        clus.quant=quantile(clusid[clusid>0],probs=c(.1,.5,.9))
+        midpt = clus.quant[2]
+        midpt2 = clus.quant[1]
+        midpt3 = clus.quant[3]
+        
+        clusid.df <- data.frame(id=microgliaReshape@meta.data$new_clusters,
+                                score=microgliaReshape@meta.data[[m]])
+        
+        clusid.df_1_2 = clusid.df[which(clusid.df$id%in%c(1,2)),]
+        clusid.df_1_3 = clusid.df[which(clusid.df$id%in%c(1,3)),]
+        clusid.df_1_4 = clusid.df[which(clusid.df$id%in%c(1,4)),]
+        clusid.df_1_5 = clusid.df[which(clusid.df$id%in%c(1,5)),]
+        clusid.df_1_6 = clusid.df[which(clusid.df$id%in%c(1,6)),]
+        clusid.df_1_7 = clusid.df[which(clusid.df$id%in%c(1,7)),]
+        clusid.df_1_8 = clusid.df[which(clusid.df$id%in%c(1,8)),]
+        clusid.df_1_9 = clusid.df[which(clusid.df$id%in%c(1,9)),]
+        clusid.df_1_10 = clusid.df[which(clusid.df$id%in%c(1,10)),]
+        
+        
+        clusid.df_2_3 = clusid.df[which(clusid.df$id%in%c(2,3)),]
+        clusid.df_2_4 = clusid.df[which(clusid.df$id%in%c(2,4)),]
+        clusid.df_2_5 = clusid.df[which(clusid.df$id%in%c(2,5)),]
+        clusid.df_3_4 = clusid.df[which(clusid.df$id%in%c(3,4)),]
+        clusid.df_3_5 = clusid.df[which(clusid.df$id%in%c(3,5)),]
+        clusid.df_4_5 = clusid.df[which(clusid.df$id%in%c(4,5)),]
+
+
+   c1 = "#56B4E9"
+   c2 =  "#009E73"
+   c3 =  "#F0E442"
+   c4 =  "#E69F00"
+   c5 =  "#D55E00"
+        
+   myAddModuleScorePlot = function(df, color1, color2){
+     p = 
+     ggplot(df,aes(x=score,fill=id)) +
+  geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)+
+         scale_fill_manual(values=c(color1, color2))+ theme(legend.position = c(0.9, 0.9))
+     return(p)
+   }
+   
+   p1 = myAddModuleScorePlot(df = clusid.df_1_2, color1 = c1, color2 = c2)
+   p2=  myAddModuleScorePlot(df = clusid.df_1_3, color1 = c1, color2 = c3)
+   p3 = myAddModuleScorePlot(df = clusid.df_1_4, color1 = c1, color2 = c4)
+   p4=  myAddModuleScorePlot(df = clusid.df_1_5, color1 = c1, color2 = c5)
+   p5 = myAddModuleScorePlot(df = clusid.df_2_3, color1 = c2, color2 = c3)
+   p6=  myAddModuleScorePlot(df = clusid.df_2_4, color1 = c2, color2 = c4)
+   p7 = myAddModuleScorePlot(df = clusid.df_2_5, color1 = c2, color2 = c5)
+   p8=  myAddModuleScorePlot(df = clusid.df_3_4, color1 = c3, color2 = c4)
+   p9 = myAddModuleScorePlot(df = clusid.df_3_5, color1 = c3, color2 = c5)
+   p10=  myAddModuleScorePlot(df = clusid.df_4_5, color1 = c4, color2 = c5)
+   
+   plot_grid(p1,p2,p3,p4,p5,p6,p7,p8,p9,p10)
+   
+
+        
+        
+  #       ggplot(clusid.df_1_6,aes(x=score,fill=id)) +
+  # geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)
+  #       ggplot(clusid.df_1_7,aes(x=score,fill=id)) +
+  # geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)
+  #       ggplot(clusid.df_1_8,aes(x=score,fill=id)) +
+  # geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)
+  #       ggplot(clusid.df_1_9,aes(x=score,fill=id)) +
+  # geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)
+  #       ggplot(clusid.df_1_10,aes(x=score,fill=id)) +
+  # geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)+ scale_fill_manual(values=c("#E7B800", "#FC4E07"))
+        
+
+```
+
+#### Convert Seurat data to monocle data
+
+```{r}
+data = as(as.matrix(microgliaReshape@assays$RNA@counts), 'sparseMatrix')
+pd <- new('AnnotatedDataFrame', data = microgliaReshape@meta.data)
+
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+my_cds <- newCellDataSet(data,
+                              phenoData = pd,
+                              featureData = fd,
+                              lowerDetectionLimit = 0.5,
+                              expressionFamily = negbinomial.size())
+
+my_cds <- estimateSizeFactors(my_cds)
+my_cds <- estimateDispersions(my_cds)
+my_cds <- detectGenes(my_cds, min_expr = 0.1)
+head(fData(my_cds))
+head(pData(my_cds))
+```
+
 
 
 #### the function to view expression of gene in selected clusters
@@ -925,7 +1100,10 @@ ALS_DAM.sig.up = intersect(ALS.sig.up$Official.Symbol, DAM.sig.up$gene)
 ALS_DAM.sig.up = ALS_DAM.sig.up[!ALS_DAM.sig.up%in%c("5430435G22Rik","Clec7a")]
 ALS_DAM.sig.down = intersect(ALS.sig.down$Official.Symbol, DAM.sig.down$gene)
 ALS_DAM.sig.up.down = union(ALS_DAM.sig.up,ALS_DAM.sig.down)
+```
 
+
+```{r}
 Idents(microgliaReshape) = "new_clusters"
 microgliaReshape_new_clusters_avergeExp = AverageExpression(microgliaReshape ,assays = "SCT")
 microgliaReshape_new_clusters_avergeExp = data.matrix(microgliaReshape_new_clusters_avergeExp$SCT)
@@ -1797,6 +1975,9 @@ Arf1_vs_WT_df2 = merge(Arf1_vs_WT_deg_df, rbind(Arf1_vs_WT_down,Arf1_vs_WT_up), 
 Arf1_vs_WT_df2 = Arf1_vs_WT_df2[order(Arf1_vs_WT_df2$Freq, decreasing = T),]
 write.csv(Arf1_vs_WT_df2, "results/Arf1-all_Regulated.csv", quote = F, row.names = F)
 
+Arf1_vs_WT_df2 = read.csv("~/Desktop/active_projects/ccbr1045_scRNA/analysis/results/microgliaCluster_Arf1_vs_WT/Arf1-all_Regulated.csv", header = T, stringsAsFactors = F)
+write.csv(Arf1_vs_WT_df2, "~/Desktop/active_projects/ccbr1045_singleCell/analysis/results/microglia_Arf1_vs_WT/Arf1-all_Regulated.csv", row.names = F)
+library(pheatmap)
 Arf1_vs_WT_upReg = Arf1_vs_WT_df2[which(Arf1_vs_WT_df2$Arf1.vs.all=="up-regulated"),]
 rownames(Arf1_vs_WT_upReg)= Arf1_vs_WT_upReg$genes
 Arf1_vs_WT_upReg = data.matrix(Arf1_vs_WT_upReg[,3:6])
@@ -1806,7 +1987,8 @@ Arf1_vs_WT_downReg = data.matrix(Arf1_vs_WT_downReg[,3:6])
 Arf1_vs_WT_upmap = pheatmap(Arf1_vs_WT_upReg[1:50,],scale="row",cellwidth = 65, main = "Up-regulated genes")
 Arf1_vs_WT_downmap = pheatmap(Arf1_vs_WT_downReg[1:50,],scale="row",cellwidth = 65, main = "Down-regulated genes")
 
-
+write.csv(Arf1_vs_WT_upReg[1:50,], "~/Desktop/active_projects/ccbr1045_singleCell/analysis/results/microglia_Arf1_vs_WT/Arf1-all_upRegulated.csv")
+write.csv(Arf1_vs_WT_downReg[1:50,], "~/Desktop/active_projects/ccbr1045_singleCell/analysis/results/microglia_Arf1_vs_WT/Arf1-all_downRegulated.csv")
 
 
 pdf("results/heatmaps/Arf1-all_upRegulated.pdf", width = 7, height = 9)
