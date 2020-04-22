@@ -148,6 +148,16 @@ DimPlot(y_x.rds_1.2, reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,gro
 ggsave(filename = "results/umaps/tabulaMuris_allCellTypes_merged.pdf", plot = p1)
 DimPlot(y_x.rds_1.2, reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,group.by="mouseRNAseq_main")+ NoLegend()
 DimPlot(y_x.rds_1.2, reduction= "umap",label = TRUE,repel=TRUE,na.value=TRUE,group.by="immgen_main")+ NoLegend()
+
+
+length(microgliaReshape@meta.data[which(microgliaReshape@meta.data$SampleName=="WT"&microgliaReshape@meta.data$new_clusters==5),1])/
+  length(microgliaReshape@meta.data[which(microgliaReshape@meta.data$SampleName=="WT"),1])
+
+
+length(microgliaReshape@meta.data[which(microgliaReshape@meta.data$SampleName=="Arf1_KO"&microgliaReshape@meta.data$new_clusters==5),1])/
+length(microgliaReshape@meta.data[which(microgliaReshape@meta.data$SampleName=="Arf1_KO"),1])
+
+
 ```
 
 
