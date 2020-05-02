@@ -85,6 +85,7 @@ library(RColorBrewer)
 library(ComplexHeatmap)
 library(circlize)
 library(monocle)
+library(cluster)
 theme_set(theme_classic())
 ```
 
@@ -199,6 +200,25 @@ sum(df_mouseRNAseq_main$Freq)
 length(intersect(rownames(microglia_mouseRNAseq_main), rownames(microglia_tabulaMuris)))
 ```
 
+#### Assessing cluster separation with Silhouette Plot
+```{r}
+#runRes = c(0.3,0.6,0.8,1,1.2)
+runRes = c(0.3,0.6,0.8)
+
+for ( res in runRes){
+  coord = Embeddings(microgliaReshape, reduction = "pca")[,1:15]
+  Idents(microgliaReshape) = microgliaReshape@meta.data[[paste0('SCT_snn_res.', res)]]
+  clusters = Idents(microgliaReshape)
+  d = dist(coord, method = "euclidean")
+  sil = silhouette(as.numeric(clusters), dist = d)
+  pdf(paste0("SilhouettePlot_res", res,".pdf"), height = 16, width = 13)
+  plot(sil, col=as.factor(clusters[order(clusters, decreasing = F)]), main = paste("Silhouette plot of Seurat clustering - resolution ", res))+ 
+  abline(v=mean(sil[,3]), col="red4", lty=4)
+  dev.off()
+}
+
+```
+
 
 #### create umap plot for four samples.
 ```{r umap_tabulaMuris}
@@ -230,7 +250,7 @@ FeaturePlot(macrophageSubset,features = c("Olfml3"), split.by = "Sample")
 ```
 
 
-
+#### create umap for different resolutions
 ```{r}
 p1 = 
 DimPlot(microgliaReshape, reduction = "umap", group.by = "new_clusters",split.by = "SampleName", label = T, repel = T, ncol = 2) +NoLegend()
@@ -238,7 +258,10 @@ ggsave(filename = "results/umaps/umap_seurat_clusters_microglia.pdf", plot = p1)
 p2 = 
 DimPlot(microgliaReshape, reduction = "umap", group.by = "new_clusters",label = T, repel = T) +NoLegend()
 ggsave(filename = "results/umaps/umap_seurat_clusters_microglia_merged.pdf", plot = p2)
+
+DimPlot(microgliaReshape, reduction = "umap", group.by = "SCT_snn_res.0.3", label = T, repel = T) +NoLegend()
 ```
+
 
 
 #### Number of microglia cells in each cluster split by sample
