@@ -30,9 +30,24 @@ Folder structure
 └── ...
 ```
 
+
 Workflow for this project:
+-----------
 
 ![workflow chart](https://github.com/da-yin/ccbr1045_singleCell/blob/master/analysis/results/ccbr1045_workflow.jpg)
+
+
+
+
+Key findings:
+-----------
+
+- Arf1 KO shows similar microglia gene dysregulation signature to AD, ALS, MS. 
+- A microglia subtype  - microglia Cluster 5 is identified and is strongly associated with Arf1-deficicent neurodegeneration. Cluster 5 markers include some of the previously known neurodegenerative risk factors Apoe, Cd63, Cxcl2, Cd52, Ctsb, H2-D1, Fth1, and Spp1
+- Cluster 5 is also characterized by down-regulation of several microglia homeostatic genes, including P2ry12, P2ry13, Tmem119, Selplg, Cx3cr1, Hexb, and Siglech
+- Cluster1 has the opposite expression in “disease markers” and ”homeostatic markers” compared to Cluster 5. Cluster 2 and Cluster 4 has ”in-between” expression for these genes, and may represent transitional state from homeostatic to pro-inflammatory state. 
+- The pathogenic phenotype of Arf1 knock-out is associated with a shift in the distribution of number of cells from Cluster 1 to Cluster 5. Arf1-KO microglia cells are depleted in Cluster1 and enriched in Cluster 5 compared to three other samples. Percentage of cells in Cluster 5 for WT (5%), for Arf1_KO(15%).
+
 
 
 Processed data source: 
@@ -45,9 +60,5 @@ signature by aging ..... Acta Neuropathol. Commun. 3, 31 (2015).
 
 
 
-The four conditions are as follows:
-WT: No disease
-Arf_KO: disease
-Ifng_KO: No disease
-Arf_KO/Ifng_KO: No disease
+
 
