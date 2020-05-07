@@ -30,6 +30,11 @@ Folder structure
 └── ...
 ```
 
+Workflow for this project:
+
+![workflow chart](https://github.com/da-yin/ccbr1045_singleCell/blob/master/analysis/results/ccbr1045_workflow.jpg)
+
+
 Processed data source: 
 
 - SOD1_Microglia_DEGs.csv: SODG93A endstage versus nontransgenic day 130 for ALS (Chiu et al., 2013)
