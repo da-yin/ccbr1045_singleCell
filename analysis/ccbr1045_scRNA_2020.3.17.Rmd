@@ -1266,6 +1266,52 @@ test  = fisher.test(dat)
 test$p.value
 ```
 
+```{r}
+ma = read.table("~/Desktop/active_projects/ccbr1045_singleCell/analysis/results/microgliaMarker/microgliaReshape.markers_for.each.cluster.txt", header = T, sep = "\t", stringsAsFactors = F)
+
+ma1 = ma[which(ma$cluster==1&ma$avg_logFC>0), "gene"]
+ma2 = ma[which(ma$cluster==2&ma$avg_logFC>0), "gene"]
+ma3 = ma[which(ma$cluster==3&ma$avg_logFC>0), "gene"]
+ma4 = ma[which(ma$cluster==4&ma$avg_logFC>0), "gene"]
+
+ma6 = ma[which(ma$cluster==6&ma$avg_logFC>0), "gene"]
+ma7 = ma[which(ma$cluster==7&ma$avg_logFC>0), "gene"]
+ma8 = ma[which(ma$cluster==8&ma$avg_logFC>0), "gene"]
+ma9 = ma[which(ma$cluster==9&ma$avg_logFC>0), "gene"]
+ma10 = ma[which(ma$cluster==10&ma$avg_logFC>0), "gene"]
+ma11 = ma[which(ma$cluster==11&ma$avg_logFC>0), "gene"]
+ma12 = ma[which(ma$cluster==12&ma$avg_logFC>0), "gene"]
+
+getMyORA = function(cluster){
+  temp = ma[which(ma$cluster==cluster&ma$avg_logFC>0.15), "gene"]
+  my_entrez = select(Mm, keys = temp,columns = c("ENTREZID", "SYMBOL"), keytype = "SYMBOL")
+  myKEGG_ORA =enrichKEGG(gene = as.character(my_entrez$ENTREZID), universe = as.character(allGenes_entrez$ENTREZID), organism = 'mmu',
+pvalueCutoff = 0.01, pAdjustMethod = "BH", qvalueCutoff = 0.05,minGSSize = 10, maxGSSize = 500)
+  return(myKEGG_ORA)
+}
+
+myORA1 = getMyORA(1)
+myORA2 = getMyORA(2)
+myORA3 = getMyORA(3)
+myORA4 = getMyORA(4)
+
+myORA6 = getMyORA(6)
+myORA7 = getMyORA(7)
+myORA8 = getMyORA(8)
+myORA9 = getMyORA(9)
+myORA10 = getMyORA(10)
+myORA11 = getMyORA(11)
+myORA12 = getMyORA(12)
+
+
+
+ma5 = ma[which(ma$cluster==5&ma$avg_logFC>0), "gene"]
+
+merge_result(list(cluster1 = myORA1, cluster2 = myKEGG_ORA2,cluster3 = myKEGG_ORA3,cluster4 = myKEGG_ORA4, cluster5=myKEGG_ORA5,cluster6 = myORA6,cluster7 = myORA7,cluster8 = myORA8,cluster9 = myORA9,cluster10 = myORA10, cluster11 = myORA11,cluster12 = myORA12))%>% 
+  dotplot(., showCategory=4)
+
+```
+
 
 #### Find markers cluster5-cluster1 
 ```{r}
@@ -1274,6 +1320,48 @@ Idents(microglia.mainSubset) = "new_clusters"
 markers.cluster5_cluster1 = 
 FindMarkers(microglia.mainSubset, ident.1=5, ident.2=1,test.use="MAST", logfc.threshold = 0.05, min.pct = 0.05)
 write.table(markers.cluster5_cluster1, "results/microgliaCluster5/degs.cluster5-cluster1.txt", quote = F,row.names = T, sep = '\t', col.names=NA)
+
+
+
+
+
+Idents(microgliaReshape) = "new_clusters"
+Allmarkers.cluster5_cluster1 = 
+FindMarkers(microgliaReshape, ident.1=5, ident.2=1,test.use="MAST", logfc.threshold = 0.01, min.pct = 0.01)
+markers.cluster4_cluster1 = 
+FindMarkers(microgliaReshape, ident.1=4, ident.2=1,test.use="MAST", logfc.threshold = 0.1, min.pct = 0.1)
+markers.cluster3_cluster5 = 
+FindMarkers(microgliaReshape, ident.1=3, ident.2=5,test.use="MAST", logfc.threshold = 0.1, min.pct = 0.1)
+markers.cluster2_cluster5 = 
+FindMarkers(microgliaReshape, ident.1=2, ident.2=5,test.use="MAST", logfc.threshold = 0.1, min.pct = 0.1)
+
+Allmarkers.cluster5_cluster1_sig =
+Allmarkers.cluster5_cluster1[which(Allmarkers.cluster5_cluster1$p_val_adj<0.05),]
+
+markers.cluster4_cluster1_sig =
+markers.cluster4_cluster1[which(markers.cluster4_cluster1$p_val_adj<0.05),]
+
+markers.cluster3_cluster5_sig =
+markers.cluster3_cluster5[which(markers.cluster3_cluster5$p_val_adj<0.05),]
+
+markers.cluster2_cluster5_sig =
+markers.cluster2_cluster5[which(markers.cluster2_cluster5$p_val_adj<0.05),]
+
+
+Allmarkers.cluster5_cluster1_sig
+
+Allmarkers.cluster5_cluster1_sig$SYMBOL = rownames(Allmarkers.cluster5_cluster1_sig)
+
+aa = Allmarkers.cluster5_cluster1_sig
+deg = left_join(aa, cluster5_sig_entrez, by="SYMBOL")
+deg = deg[-which(duplicated(deg$ENTREZID)),]
+deg = deg[-which(is.na(deg$ENTREZID)),]
+
+
+rownames(deg) = deg$ENTREZID
+  deg = deg %>% dplyr::select(avg_logFC) %>% data.matrix()
+  deg = unlist(deg[,1])
+
 ```
 
 ```{r}
@@ -1288,6 +1376,82 @@ markers.cluster5_cluster1.sig = markers.cluster5_cluster1[which(markers.cluster5
 myCluster5_cluster1_deg_ORA = enrichGO(gene = as.character(markers.cluster5_cluster1.sig$gene),universe = as.character(rownames(microgliaReshape)),
          OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", pvalueCutoff = 0.01, qvalueCutoff = 0.05)
 
+suppressMessages(library(org.Mm.eg.db))
+
+library(biomaRt)
+Mm = org.Mm.eg.db
+
+cluster5_sig_entrez = 
+select(Mm, keys = rownames(markers.cluster5_cluster1.sig),
+            columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+
+cluster4_sig_entrez = 
+select(Mm, keys = rownames(markers.cluster4_cluster1_sig),
+            columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+cluster3_sig_entrez = 
+select(Mm, keys = rownames(markers.cluster3_cluster5_sig),
+            columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+cluster2_sig_entrez = 
+select(Mm, keys = rownames(markers.cluster2_cluster5_sig),
+            columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+cluster1_sig_entrez = 
+select(Mm, keys = ma1,columns = c("ENTREZID", "SYMBOL"), keytype = "SYMBOL")
+
+
+allGenes_entrez = select(Mm, keys = rownames(microgliaReshape),
+            columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+
+myKEGG_ORA1 =enrichKEGG(gene = as.character(cluster1_sig_entrez$ENTREZID), universe = as.character(allGenes_entrez$ENTREZID), organism = 'mmu',
+pvalueCutoff = 0.01, pAdjustMethod = "BH", qvalueCutoff = 0.05,minGSSize = 10, maxGSSize = 500)
+
+myKEGG_ORA5 =enrichKEGG(gene = as.character(cluster5_sig_entrez$ENTREZID), universe = as.character(allGenes_entrez$ENTREZID), organism = 'mmu',
+pvalueCutoff = 0.01, pAdjustMethod = "BH", qvalueCutoff = 0.05,minGSSize = 10, maxGSSize = 500)
+
+myKEGG_ORA4 =enrichKEGG(gene = as.character(cluster4_sig_entrez$ENTREZID), universe = as.character(allGenes_entrez$ENTREZID), organism = 'mmu',
+pvalueCutoff = 0.01, pAdjustMethod = "BH", qvalueCutoff = 0.05,minGSSize = 10, maxGSSize = 500)
+
+myKEGG_ORA3 =enrichKEGG(gene = as.character(cluster3_sig_entrez$ENTREZID), universe = as.character(allGenes_entrez$ENTREZID), organism = 'mmu',
+pvalueCutoff = 0.01, pAdjustMethod = "BH", qvalueCutoff = 0.05,minGSSize = 10, maxGSSize = 500)
+
+myKEGG_ORA2 =enrichKEGG(gene = as.character(cluster2_sig_entrez$ENTREZID), universe = as.character(allGenes_entrez$ENTREZID), organism = 'mmu',
+pvalueCutoff = 0.01, pAdjustMethod = "BH", qvalueCutoff = 0.05,minGSSize = 10, maxGSSize = 500)
+
+
+
+merge_result(list(cluster1 = myKEGG_ORA1, cluster5=myKEGG_ORA5))%>% 
+  dotplot(., showCategory=10)
+
+dotplot(object = myKEGG_ORAs)
+df = myKEGG_ORAs@result
+
+library(pathview)
+
+pathview(gene.data = deg, pathway.id = "mmu04668",species = "mmu")
+
+pathview(gene.data = deg, pathway.id = "mmu04668",species = "mmu") #TNF signaling pathway
+pathview(gene.data = deg, pathway.id = "mmu04657",species = "mmu") #IL-17 signaling pathway
+
+```
+
+```{r}
+myKEGG_ORAs@result
+
+myKEGG_ORAs = setReadable(myKEGG_ORAs, 'org.Mm.eg.db', 'ENTREZID')
+
+```
+
+
+```{r}
 select1 = c("leukocyte migration","tumor necrosis factor production","cytokine-mediated signaling pathway","regulation of inflammatory response","leukocyte chemotaxis","response to lipopolysaccharide","regulation of leukocyte differentiation","neuron death")
 
 select2 = c("leukocyte migration","response to bacterium","positive regulation of leukocyte differentiation","cell chemotaxis","cytokine-mediated signaling pathway",
