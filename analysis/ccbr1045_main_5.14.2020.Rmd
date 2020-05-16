@@ -1,0 +1,593 @@
+---
+title: "ccbr1045 Single-cell RNA-seq analysis of mouse brain"
+author: "Da"
+date: "3/14/2020"
+output: html_document
+---
+
+## This code is the downstream analysis part of single-cell RNAseq data from mouse brain, with a focus on microglia
+## Experimental Design: four samples Arf1_KO, WT, Arf1_IFNg_KO and IFNg_KO in the merged object
+
+## This code has three parts. 
+- PartI is clustering, cell annotation, and cell compositional analysis 
+- PartII examines the gene expression and pathways at sample level
+- PartIII is gene expression and pathway analysis at cluster level
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# libraries for single-cell
+library(Seurat) 
+library(farver) 
+library(BiocGenerics) 
+library(S4Vectors)
+library(MAST) 
+library(monocle) 
+library(cluster)
+library(URD)
+# libraries for data wrangling 
+library(dplyr) 
+library(tidyverse) 
+library(stringr) 
+library(filesstrings)
+library(here)
+library(data.table)
+library(readr) 
+library(reshape2)
+# libraries for visulization
+library(ggplot2) 
+library(ggrepel) 
+library(pheatmap) 
+library(cowplot) 
+library(png) 
+library(DT) 
+library(RColorBrewer) 
+library(ComplexHeatmap) 
+library(circlize)
+# libraries for pathway analysis
+library(clusterProfiler) 
+library(org.Mm.eg.db) 
+library(clusterProfiler.dplyr)
+library(AUCell)
+library(GSEABase)
+library(singscore)
+library(garnett)
+library(GSVA)
+# set theme for plots
+theme_set(theme_classic())
+```
+
+#####################################################################################################################
+# Part I
+#####################################################################################################################
+
+
+#### so_tabulaMuris2020.3.4.rds is the four sample merged seurat object with added tabula Muris cell identity annotation
+```{r}
+#original data source: biowulf /data/CCBR/projects/ccbr1045/scrna_guohao2/SingleR_microgliaing/so_tabulaMuris2020.3.4.rds
+so = readRDS("../rawData/so_tabulaMuris2020.3.4.rds")
+```
+
+#### The composition of different cell identities by different annotation databases. Microglia accounts for more than half. 
+```{r}
+# examine cell annotations projected onto umap using different databases
+annotations = c("mouseRNAseq_main","Immgen_main","tabulaMuris")
+for (i in annotations){
+  dp =
+  DimPlot(so, reduction = "umap", label=T,  repel = T, group.by = i, pt.size = 0.1) + labs(title = i) 
+  pdf(paste0("DimPlot_", i,".pdf"))
+  print(dp)
+  dev.off()
+}
+
+# examine the composition of different cell identities by Tabula Muris
+df_tabulaMuris = table(so@meta.data$tabulaMuris) %>% as.data.frame()
+colnames(df_tabulaMuris)[1] = "identity"
+colnames(df_tabulaMuris)[2] = "number"
+#Create a pie chart to show the relative proportion of each cell identity
+mybar = ggplot(df_tabulaMuris, aes(x = 1, y = number, fill= identity)) + geom_bar(stat = "identity") + 
+    coord_polar(theta = "y")+
+    theme(axis.ticks=element_blank(),  # the axis ticks
+          axis.title=element_blank(),  # the axis labels
+          axis.text.y=element_blank()) # the 0.75, 1.00, 1.25 labels.
+
+ggsave(filename = "results/umaps/tabulaMuris_allCellTypes_merged_pie.pdf", plot = mybar)
+
+```
+
+#### Select only the microglial cells annotated by Tebula Muris, reclusterd the cells
+```{r}
+Idents(so) = "tabulaMuris"
+microgliaSubset = subset(so, cells=which(so$tabulaMuris=="microglial cell"))
+microgliaReshape = SCTransform(microgliaSubset) %>% RunPCA() 
+# Use elbowPlot to find the number of PC to use for clustering
+ElbowPlot(microgliaReshape)
+```
+
+#### Rescale and recluster the microglia cells
+```{r}
+npcs = 15
+microgliaReshape= RunUMAP(microgliaReshape, dims = 1:npcs)  %>% FindNeighbors() %>% FindClusters(algorithm=3,resolution=0.6)
+```
+
+#### Assessing cluster separation with Silhouette Plot
+```{r}
+runRes = c(0.3,0.6,0.8) # different clustering resolutions 
+for (res in runRes){
+  coord = Embeddings(microgliaReshape, reduction = "pca")[,1:15]
+  Idents(microgliaReshape) = microgliaReshape@meta.data[[paste0('SCT_snn_res.', res)]]
+  clusters = Idents(microgliaReshape)
+  d = dist(coord, method = "euclidean")
+  # calculate difference between distances across all clusters, 
+  # as well as the average distance to cells in the same cluster
+  sil = silhouette(as.numeric(clusters), dist = d) 
+  # Cells with large positive silhouette widths are closer to other cells in the same cluster 
+  # than to cells in different clusters
+  pdf(paste0("SilhouettePlot_res", res,".pdf"), height = 16, width = 13)
+  plot(sil, col=as.factor(clusters[order(clusters, decreasing = F)]), 
+       main = paste("Silhouette plot of Seurat clustering - resolution ", res))+ 
+  abline(v=mean(sil[,3]), col="red4", lty=4)
+  dev.off()
+}
+```
+
+#### Find out the percentage of microglia in each subcluster for each sample after normalizing for total cell counts in each sample.
+```{r}
+df_microgliaReshape =
+as.data.frame(table(microgliaReshape$new_clusters, microgliaReshape$SampleName))
+colnames(df_microgliaReshape)[1] = "cluster"
+colnames(df_microgliaReshape)[2] = "Sample"
+df_microgliaReshape_wide = spread(df_microgliaReshape, Sample, Freq)
+rownames(df_microgliaReshape_wide) = df_microgliaReshape_wide$cluster
+
+# normalize cluster cell numbers by total cell numbers by each sample
+df_microgliaReshape_wide$Arf1_IFNg_KO=
+  round(df_microgliaReshape_wide$Arf1_IFNg_KO*10000/sum(df_microgliaReshape_wide$Arf1_IFNg_KO))
+df_microgliaReshape_wide$Arf1_KO=
+  round(df_microgliaReshape_wide$Arf1_KO*10000/sum(df_microgliaReshape_wide$Arf1_KO))
+df_microgliaReshape_wide$IFNg_KO=
+  round(df_microgliaReshape_wide$IFNg_KO*10000/sum(df_microgliaReshape_wide$IFNg_KO))
+df_microgliaReshape_wide$WT=
+  round(df_microgliaReshape_wide$WT*10000/sum(df_microgliaReshape_wide$WT))
+
+df_microgliaReshape_wide = data.matrix(df_microgliaReshape_wide[,2:5])
+composition = sweep(df_microgliaReshape_wide,1,rowSums(df_microgliaReshape_wide),`/`) %>% data.frame()
+composition$cluster = as.numeric(rownames(composition))
+write.table(composition, "results/umaps/Number_of_microglia_in_each_cluster_by_sample.fraction.txt", 
+            quote = F, sep = "\t", row.names = F, )
+
+composition_long = melt(composition, id.vars=c("cluster"))
+colnames(composition_long) = c("cluster","Sample","ratio")
+
+p1 = 
+ggplot(composition_long, aes(x = as.factor(cluster), y = ratio, fill=Sample)) + 
+  geom_bar(position = "dodge", stat = "identity", width = 0.5) + theme(legend.position="top") + 
+  xlab("cluster") + theme(axis.text.x = element_text(face="bold")) + ylab("fraction")
+
+ggsave(filename = "results/umaps/Number_of_microglia_in_each_cluster_by_sample.fraction.pdf", plot = p1)
+```
+
+#### Use chi-squared test to find out under and over representation of each cluster
+```{r}
+#convert the microglia cell table from long format to wide format
+tib = reshape(as.data.frame(table(microgliaReshape$new_clusters, microgliaReshape$SampleName)),
+        idvar = "Var1", timevar = "Var2", direction = "wide" )
+colnames(tib)[1] = "cluster"
+tibmat = tib
+tibmat = data.matrix(tibmat[,2:5])
+c1 = as.table(rbind(c(tibmat[1,2], sum(tibmat[,2])-tibmat[1,2]), 
+                    c(tibmat[1,4], sum(tibmat[,4])-tibmat[1,4])))
+
+#construct the tables for chi-square test
+#Test wether a given cluster is significantly different from other clusters in the number of cells
+Arf1_WT_chi.sq = list()
+for (n in 1:12){ 
+ Arf1_WT_chi.sq[[n]] = as.table(rbind(c(tibmat[n,2], tibmat[n,4]), 
+                    c(sum(tibmat[,2])-tibmat[n,2], sum(tibmat[,4])-tibmat[n,4])))
+}
+
+Arf1_IFNg_chi.sq = list()
+for (n in 1:12){
+ Arf1_IFNg_chi.sq[[n]] = as.table(rbind(c(tibmat[n,2], tibmat[n,3]), 
+                    c(sum(tibmat[,2])-tibmat[n,2], sum(tibmat[,3])-tibmat[n,3])))
+}
+
+#Apply chi-square test
+Arf1_WT_chi.sq_res = lapply(Arf1_WT_chi.sq, function(x) {
+  chisq.test(x)
+})
+
+Arf1_IFNg_chi.sq_res = lapply(Arf1_IFNg_chi.sq, function(x) {
+  chisq.test(x)
+})
+
+# Get the p values from test statistics
+Arf1_WT_chi.sq_res_Pvalue = list()
+for (n in 1:12){
+  Arf1_WT_chi.sq_res_Pvalue[[n]] = Arf1_WT_chi.sq_res[[n]]$p.value
+}
+
+Arf1_IFNg_chi.sq_res_Pvalue = list()
+for (n in 1:12){
+  Arf1_IFNg_chi.sq_res_Pvalue[[n]] = Arf1_IFNg_chi.sq_res[[n]]$p.value
+}
+
+#construct the p values into a table for presentation
+myChisq = cbind(matrix(unlist(Arf1_WT_chi.sq_res_Pvalue)),matrix(unlist(Arf1_IFNg_chi.sq_res_Pvalue)))
+
+rownames(myChisq) = c("cluster1","cluster2","cluster3","cluster4","cluster5","cluster6",
+                      "cluster7","cluster8","cluster9","cluster10","cluster11","cluster12")
+
+colnames(myChisq) = c("Arf1_WT", "Arf1_IFNg")
+myChisq = as.data.frame(myChisq)
+myChisq$Arf1_WT_sig = ifelse(myChisq$Arf1_WT < 0.05, "sig","ns")
+myChisq$Arf1_IFNg_sig = ifelse(myChisq$Arf1_WT < 0.05&myChisq$Arf1_IFNg< 0.05, "sig","ns")
+write.csv(myChisq, "results/microgliaCluster5/enrichment_depletion_of_cells_in_Arf1_chi-squared.csv", quote = F)
+```
+
+#####################################################################################################################
+# Part II
+#####################################################################################################################
+
+#### DEG for whole microglia cell population:
+```{r}
+#Compare sample to sample to find DEG using default parameters. 
+Idents(microgliaReshape) = "SampleName"
+
+##### First use Arf1_KO as experiment, WT as control
+Microglia.Markers_Arf1_WT = 
+FindMarkers(microgliaReshape,ident.1="Arf1_KO",ident.2="WT",test.use="MAST", 
+            logfc.threshold = 0.25, min.pct = 0.25)
+Microglia.Markers_Arf1_WT$gene = rownames(Microglia.Markers_Arf1_WT)
+write.table(Microglia.Markers_Arf1_WT, "results/microglia_Arf1_vs_WT/Arf1_WT_degs.txt", 
+            quote=F, sep="\t", col.names = NA)
+
+##### Then use IFNg experiment, WT as control
+Microglia.Markers_IFNg_WT = 
+FindMarkers(microgliaReshape,ident.1="IFNg_KO",ident.2="WT",test.use="MAST", 
+            logfc.threshold = 0.25, min.pct = 0.25)
+
+Microglia.Markers_IFNg_WT$gene = rownames(Microglia.Markers_IFNg_WT)
+write.table(Microglia.Markers_IFNg_WT, "results/microglia_IFNg_vs_WT/IFNg_WT_degs.txt", 
+            quote=F, sep="\t", col.names = NA)
+
+```
+
+#### create volcano plots for sample level or cluster level deg
+```{r}
+#' function to take in a deg table and create a volcano at sample level
+#'  
+#' @param file a file that has the DE results from findMarkers
+#' @param contrast contrast for two conditions (samples)
+#' @param dir the directory that has the DEG table for that contrast
+#' @param logFC.cutoff log fold change cut-off to be used for creating volcano plots and differential coloration
+#'
+#' @return volcano plots showing significant DEs in red
+#'
+myVolcano = function(file,contrast, dir, logFC.cutoff){
+  deg = read.table(paste0("results/", dir,"/", file), header = T, stringsAsFactors = F)
+  deg$p_val_adj = ifelse(deg$p_val_adj==0, 5e-324, deg$p_val_adj)
+  deg.sig = deg[which(deg$p_val_adj<0.05&abs(deg$avg_logFC)>logFC.cutoff),]
+  write.table(deg.sig, paste0("results/", dir, "/", contrast, "_degs_sig",".txt"), quote = F, sep = "\t")
+  
+  deg$significance = ifelse(deg$p_val_adj<0.05&abs(deg$avg_logFC)>logFC.cutoff, "sig", "ns")
+  deg$gene = rownames(deg)
+  volcanoPlot =
+    ggplot(deg, aes(x=avg_logFC, y=-log(p_val_adj, 10))) +
+    geom_point(colour = ifelse(deg$significance=="sig", "red", "black"), size = 0.8, alpha=0.5) +
+    ggtitle(contrast) +
+    xlab("log2 FC") +
+    ylab("-log10 adjusted p-value") +
+    geom_text_repel(size = 3,aes(label= ifelse(deg$significance=="sig",gene,""),
+                                 colour = "red",fontface="bold"))+
+    theme_classic() +
+    theme(legend.position = "none")+ xlim(-1,1) + ylim(0,350)
+    pdf(paste0("results/", dir, "/", contrast, "_volcano",".pdf"))
+    print(volcanoPlot)
+    dev.off()
+}
+
+myVolcano(file = "Arf1_WT_degs.txt", dir = "microglia_Arf1_vs_WT", contrast = "Arf1-WT",logFC.cutoff=0.2)
+myVolcano(file = "IFNg_WT_degs.txt", dir = "microglia_IFNg_vs_WT", contrast = "IFNg-WT",logFC.cutoff=0.2)
+```
+
+#### create a gene expression profile from a list of genes (signature scores)
+```{r}
+#' aggregate individual marker score (AddModuleScore) from a gene list and 
+#' create a composite gene expression profile
+#'
+#' @param obj a seurat object
+#' @param genes a vector of genes (e.g. genes that are disease risk factors)
+#' @param group the identity of the seurat object (e.g. cluster, sample, condition, etc.)
+#' @param name1 the name of the 1st sample/cluster/condition
+#' @param name2 the name of the 2nd sample/cluster/condition
+#'
+#' @return volcano plots showing significant DEs in red
+#'
+get_signatureScore = function(obj, genes, group, name1, name2){
+  Idents(obj) = group
+  obj = AddModuleScore(object = obj, features = genes, name = deparse(substitute(genes)))
+  m = paste0(deparse(substitute(genes)),"1")
+  clusid = obj@meta.data[[m]]
+  clusid = scales::rescale(obj@meta.data[[m]], to=c(0,1))
+  clus.quant=quantile(clusid[clusid>0],probs=c(.1,.5,.9))
+  midpt = clus.quant[2]
+  midpt2 = clus.quant[1]
+  midpt3 = clus.quant[3]
+  
+  clusid.df = data.frame(id=obj@meta.data[[group]],score=obj@meta.data[[m]])
+  clusid.df_name1_name2 = clusid.df[which(clusid.df$id%in%c(name1,name2)),]
+  
+  ggplot(clusid.df_name1_name2,aes(x=score,fill=id)) +
+  geom_density(alpha = 0.4)+ geom_histogram(position="dodge",bins=300)
+        
+}
+
+gene_set1 = c("Apoe", "Cd63", "Cxcl2","Cd52","Ctsb","H2-D1","Fth1","Spp1") # known disease risk factors
+get_signatureScore(obj = microgliaReshape, genes = gene_set1, group = "SampleName", name1 = "Arf1_KO", name2 = "WT")
+
+```
+
+#### over-representation analysis at sample level
+```{r}
+#' take a DE table and perform over-representation analysis at sample level and generate a enrich object
+#'  
+#' @param DEG DE results from findMarkers
+#' @param db Mysigdb gene set name
+#'
+#' @return my*_ORA an clusterprofiler enrich object
+#'
+getMyORA = function(DEG, db){
+   
+   mm <- org.Mm.eg.db # load the mouse gene database
+   # convert gene Symbols to Entrez IDs
+   my_entrez = AnnotationDbi::select(mm, keys = rownames(DEG),columns = c("ENTREZID", "SYMBOL"), 
+                                     keytype = "SYMBOL") # genes of interest (e.g. DEG)
+   allGenes_entrez = AnnotationDbi::select(mm, keys = rownames(microgliaReshape),
+            columns = c("ENTREZID", "SYMBOL"), keytype = "SYMBOL") #all the genes as background gene sets
+   
+   if (db == "KEGG"){
+    myKEGG_ORA =enrichKEGG(gene = as.character(my_entrez$ENTREZID), 
+                           universe = as.character(allGenes_entrez$ENTREZID), 
+                           organism = 'mmu',pvalueCutoff = 0.01, pAdjustMethod = "BH", 
+                           qvalueCutoff = 0.05,minGSSize = 10, maxGSSize = 500)
+    myKEGG_ORA = setReadable(myKEGG_ORA, 'org.Mm.eg.db', 'ENTREZID')
+    return(myKEGG_ORA)
+  }
+  if (db =="BP"){
+    myBP_ORA = enrichGO(gene = rownames(DEG),universe = rownames(microgliaReshape),
+         OrgDb = org.Mm.eg.db,keyType='SYMBOL', ont = "BP",pAdjustMethod = "BH", 
+         pvalueCutoff = 0.01, qvalueCutoff = 0.05)
+    myBP_ORA = setReadable(myBP_ORA, 'org.Mm.eg.db', 'ENTREZID')
+    return(myBP_ORA)
+  }
+  if (db == "Reactome"){
+    myReactome_ORA = enrichPathway(gene = my_entrez$ENTREZID, 
+                                   universe = allGenes_entrez$ENTREZID, organism = 'mouse', 
+                                   pvalueCutoff = 0.01, pAdjustMethod = "BH", 
+                                   qvalueCutoff = 0.05, minGSSize = 10, maxGSSize = 500)
+    myReactome_ORA = setReadable(myReactome_ORA, 'org.Mm.eg.db', 'ENTREZID')
+    return(myReactome_ORA)
+  }
+}
+
+
+ORA1_KEGG = getMyORA(Microglia.Markers_Arf1_WT, db = "KEGG")
+ORA1_BP = getMyORA(DEG = Microglia.Markers_Arf1_WT, db = "BP")
+ORA1_Reactome = getMyORA(DEG = Microglia.Markers_Arf1_WT, db = "Reactome")
+dir.create("results/ORA/")
+write.csv(ORA1_BP@result, "results/ORA/ORA1_BP.csv", quote=F)
+```
+
+#####################################################################################################################
+# Part III
+#####################################################################################################################
+
+#### perform this function creates a complext heatmap that shows most variable enriched pathways across all clusters and its correlation with expression of a gene and sample conditions
+```{r}
+#' a complext heatmap that shows most variable enriched pathways across all clusters
+#' and its correlation with expression of select gene and sample conditions
+#' @param obj a seurat object
+#' @param geneset gene sets downloaded from Mysigdb
+#' @param group the identity of the seurat object, e.g. sample, cluster, condition
+#'
+#' @return heatmap, with the top annotations showing gene expression, cluster composition
+#' @return side annotation showing average enrichment score for the pathways and heatmap showing relative enrichment across groups
+#'
+myGSVA = function(obj, geneset, group, gene){
+  gs = GSEABase::getGmt(paste0("processedData/", geneset))
+  Idents(obj) = group
+  aveExp = AverageExpression(obj) # calculate average expression across groups (samples, clusters etc.)
+  # GSVA analysis using ssGSEA method
+  obj_ssGSEA_gs=gsva(expr = as.matrix(as.data.frame(aveExp$RNA)),gset.idx.list=gs,method='ssgsea',ssgsea.norm=F) 
+  
+  # plot the 30 most variable pathways across groups
+  var_genes  = apply(obj_ssGSEA_gs, 1, var)
+  select_var <- names(sort(var_genes, decreasing=TRUE))[1:30]
+  obj_ssGSEA_gs_select = obj_ssGSEA_gs[select_var,]
+  rownames(obj_ssGSEA_gs_select) = gsub("_", " ", rownames(obj_ssGSEA_gs_select))
+
+  # creating a complext heatmap:
+  # calculate average expression of gene of interest across group
+  gene.aveExpr = aveExp$SCT[which(rownames(aveExp$SCT)==gene),] 
+  vec = as.numeric(gene.aveExpr[1,])
+  
+  # top annotation
+  column_ha = HeatmapAnnotation(gene_expression = anno_barplot(vec), 
+                                sample = anno_barplot(composition, gp = gpar(fill = c(2,3,5,6)), 
+                                                      bar_width = 1, height = unit(1, "cm")))
+  # side annotation
+  vec2 = rowMeans(obj_ssGSEA_gs_select)
+  row_ha = rowAnnotation(enrichment= anno_barplot(vec2))
+  
+  # legend for annotation
+  lgd = Legend(labels = colnames(composition), title = "sample",
+    legend_gp = gpar(fill = c(2,3,5,6)))
+  
+  mat = obj_ssGSEA_gs_select
+  
+  p = 
+  ComplexHeatmap::Heatmap(matrix = t(scale(t(data.matrix(mat)))), name="Z-score", km=1, 
+                        col=colorRampPalette(c("darkblue","grey","darkred"))(256), 
+                        row_names_gp = gpar(fontsize = ifelse(nrow(mat) <= 30, 10, 
+                                                       ifelse(30<nrow(mat)&nrow(mat) <= 45, 7,
+                                                       ifelse(45<nrow(mat)&nrow(mat) <= 60, 5, 4))), 
+                                            fontface = "bold"),
+                        column_names_gp = gpar(fontsize = 10, fontface = "bold"),
+                        cluster_columns = T ,column_title_gp = gpar(fontsize = 10, fontface = "bold"), 
+                        column_names_rot = 65, width = unit(5, "cm"),
+                        column_title = geneset, column_title_side = "top",
+                        top_annotation = column_ha,right_annotation = row_ha)
+
+  plot.heat = draw(p, heatmap_legend_side = "left", annotation_legend_side = "left",
+                   heatmap_legend_list = list(lgd))
+  
+  pdf(paste0(geneset, ".pdf"), width = 11)
+  print(plot.heat)
+  dev.off()
+
+}
+
+myGSVA(obj = microgliaReshape, geneset = "hallmark.v7.1.symbols.gmt", 
+       group = "new_clusters", gene = "Apoe")
+myGSVA(obj = microgliaReshape, geneset = "c6.oncogenic_signatures.v7.1.symbols.gmt", 
+       group = "new_clusters", gene = "Apoe")
+myGSVA(obj = microgliaReshape, geneset = "c2.Canonical_pathways.v7.1.symbols.gmt", 
+       group = "new_clusters", gene = "Apoe")
+myGSVA(obj = microgliaReshape, geneset = "c5.biological_process.v7.1.symbols.gmt", 
+       group = "new_clusters", gene = "Apoe")
+myGSVA(obj = microgliaReshape, geneset = "c7.immunological_signatures.v7.1.symbols.gmt", 
+       group = "new_clusters", gene = "Apoe")
+```
+
+#### use scatter plot to visulize expression for any gene across all clusters
+```{r}
+# extract cell name and their new_clusters metadata
+df_cell2cluster = microgliaReshape@meta.data[,c("cell","new_clusters")]
+# extract the normalized counts for microglia cells. Note: data is normalized value, counts is raw value.
+df_normalizedCounts = as.data.frame(as.matrix(microgliaReshape@assays$SCT@data))
+
+#' function to take in a gene, and generate expression scatter plots for all clusters.
+#'  
+#' @param gene gene of interest to show expression level
+#'
+#' @return scatter dot plot to show expression level of a gene as well as the summary statistics
+myVlnPlot = function(gene){
+  new_df_gene = df_normalizedCounts[which(rownames(df_normalizedCounts)==gene),]
+  new_df_gene_long = reshape2::melt(new_df_gene)
+  colnames(new_df_gene_long) = c("cell", "normalized_counts")
+  new_df_gene_long = merge(new_df_gene_long, df_cell2cluster, by="cell")
+  ggplot(new_df_gene_long, aes(x = new_clusters, y = normalized_counts, color=new_clusters)) + 
+    geom_point(stat = "identity",  size = 0.01, alpha = 0.03,
+             position=position_jitter(width=0.5, height=1)) + 
+    theme(legend.position='none') + 
+    stat_summary(fun.y = mean, fun.ymin = mean, fun.ymax = mean,
+                 geom = "crossbar", width = 1) + xlab("cluster")+
+    ylab("normalized counts") + ggtitle(gene)
+}
+```
+
+#### combine expression profile for individual gene into one plot
+```{r}
+# these genes are known microglia markers 
+plot_grid(myVlnPlot("P2ry12"),myVlnPlot("Cx3cr1"),myVlnPlot("Hexb"),
+          myVlnPlot("Tmem119"),myVlnPlot("Olfml3"),myVlnPlot("Siglech"), ncol = 2)
+
+# these genes are know neurodegenerative disease risk factors.
+plot_grid(myVlnPlot("Apoe"),myVlnPlot("Cd63"),myVlnPlot("Cxcl2"),myVlnPlot("Cd52"),
+          myVlnPlot("Ctsb"),myVlnPlot("H2-D1"),myVlnPlot("Fth1"),myVlnPlot("Spp1"), ncol = 3)
+```
+
+
+#### function generate deg table, volcano plots for a given cluster compared to rest of clusters
+```{r}
+#' myFindMarkders: for a given cluster, find out the DEGs between two samples. Create DEG table and volcano plots
+#'  
+#' @param seuratObj seurat object
+#' @param clusterNumber which cluster to compare
+#' @param identity1 group1 (e.g sample1)
+#' @param identity2 group2 (e.g sample2)
+#'
+#' @return volcano plots showing significant DEs in red and DEG table
+#'
+Idents(microgliaReshape) = "Sample"
+myFindMarkders = function(seuratObj, clusterNumber, identity1, identity2){
+  DEG.name = paste("cluster", clusterNumber,"_",identity1,"-", identity2, ".txt", sep = "")
+  DEG.sig.name = paste("cluster", clusterNumber,"_",identity1,"-", identity2, "_sig.txt", sep = "")
+  DEG =
+  FindMarkers(seuratObj[,which(seuratObj$seurat_clusters==clusterNumber)], ident.1=identity1,
+              ident.2=identity2,test.use="MAST", logfc.threshold = 0.05, 
+              min.pct = 0.05) #intentionally lowered the stringency 
+  DEG.sig = DEG[which(DEG$p_val_adj<0.05),]
+  DEG$significance = ifelse(DEG$p_val_adj<0.05, "sig", "ns")
+  DEG$gene = rownames(DEG)
+  volcanoPlot =
+    ggplot(DEG, aes(x=avg_logFC, y=-log10(p_val_adj))) +
+    geom_point(colour = ifelse(DEG$significance=="sig", "red", "black"), size = 0.8) +
+    ggtitle(paste("cluster", clusterNumber,"_",identity1,"-", identity2, sep = "")) +
+    xlab("log2 FC") +
+    ylab("-log10 adjusted p-value") +
+    geom_text_repel(size = 2.5,aes(label= ifelse(p_val_adj<quantile(DEG.sig$p_val_adj,prob=0.1),gene,""),
+                                   colour = "red",fontface="bold"))+
+    theme_bw() +
+    theme(legend.position = "none")+ xlim(-0.5,0.5) + ylim(0,100)
+  
+  write.table(DEG, DEG.name, quote = F, col.names=NA, sep = "\t")
+  write.table(DEG.sig, DEG.sig.name, quote = F, col.names=NA, sep = "\t")
+
+  png(paste("cluster", clusterNumber,"_",identity1,"-", identity2, ".png", sep = ""),  
+      width = 4, height = 4, units = 'in', res = 300)
+  print(volcanoPlot)
+  dev.off()
+  return(volcanoPlot)
+}
+
+dir.create("results/microglia_Arf1_vs_WT/")
+# create contrast for all 12 clusters between Arf1_KO and WT
+for (clusterNumber in 1:12){
+myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "Arf1_KO",identity2 = "WT")
+}
+file.move(list.files(pattern = "cluster"), "results/microglia_Arf1_vs_WT/")
+```
+
+#### Reading in all Arf1_KO-WT volcanos to create a new plot with grid.arrange
+```{r}
+#combine all volcanos into one figure for presentation
+rl = lapply(sprintf("results/microglia_Arf1_vs_WT/cluster%i_Arf1_KO-WT.png", 0:13), png::readPNG)
+gl = lapply(rl, grid::rasterGrob)
+gridExtra::grid.arrange(grobs=gl)
+```
+
+#### function to find top enriched pathways for a given contrast
+```{r}
+#' find the most commonly enriched terms for a given contrast
+#'  
+#' @param contrast (e.g. Arf1_KO-WT)
+#'
+#' @return plot showing most enriched pathways by frequency
+#'
+get_topTerms = function(contrast){
+  myterms = list()
+  bp = list()
+  for (i in list.files(path = "results/ORA/", pattern = paste0("contrast_",contrast,"_cluster"))){
+  myterms[[i]] = read.csv(paste0("results/ORA/", i), header = T, stringsAsFactors = F)
+  bp[[i]] = myterms[[i]]$Description
+  GObp = unlist(bp)
+  }
+  df_term =as.data.frame(table(GObp))
+  df_term = df_term[order(df_term$Freq, decreasing = T),]
+  df_term = df_term[1:20,]
+  bpPlot = 
+  ggplot(df_term, aes(x = reorder(GObp, Freq), y = Freq)) + geom_bar(stat = "identity") + coord_flip() +
+  scale_y_continuous(breaks = seq(0, 14, by=2), limits=c(0,14)) + xlab("biological process") +
+  ggtitle(paste(contrast, ":", "top enriched biological process")) + scale_x_discrete(label=short_label)
+  pdf(paste0("results/ORA/", contrast, "_freq.pdf"), width = 7.5)
+  print(bpPlot)
+  dev.off()
+  return(bpPlot)
+}
+```
+

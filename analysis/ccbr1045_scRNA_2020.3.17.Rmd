@@ -1748,7 +1748,7 @@ myFindMarkders(seuratObj = microgliaReshape,clusterNumber,identity1 = "IFNg_KO.h
 file.move(list.files(pattern = "cluster"), "results/microglia_IFNg_vs_WT/")
 ```
 
-Reading in allArf1_KO.h5-WT.h5 volcanos to create a new plot with grid.arrange
+#### Reading in allArf1_KO.h5-WT.h5 volcanos to create a new plot with grid.arrange
 ```{r}
 #combine all volcanos into one figure for presentation
 rl = lapply(sprintf("results/microglia_Arf1_vs_WT/cluster%i_Arf1_KO.h5-WT.h5.png", 0:13), png::readPNG)
@@ -1943,7 +1943,7 @@ dotplot(myBP_ORAs)
 
 #### function to generate ORA for every cluster
 ```{r}
-microglia_Arf1_vs_WT = list.files("results/microglia_Arf1_vs_WT/", pattern = "sig")
+microglia_Arf1_vs_WT = list.files("results/microglia_Arf1_vs_WT/", pattern = "sig.txt")
 Arf1_vs_WT = list()
 Arf1_vs_WT_table = list()
 Arf1_vs_WT_avg_logFC = list()
