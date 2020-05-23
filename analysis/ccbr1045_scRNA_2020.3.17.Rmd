@@ -307,9 +307,15 @@ df_microgliaReshape_wide$Arf1_KO=round(df_microgliaReshape_wide$Arf1_KO*10000/su
 df_microgliaReshape_wide$IFNg_KO=round(df_microgliaReshape_wide$IFNg_KO*10000/sum(df_microgliaReshape_wide$IFNg_KO))
 df_microgliaReshape_wide$WT=round(df_microgliaReshape_wide$WT*10000/sum(df_microgliaReshape_wide$WT))
 
-
+# four samples
 df_microgliaReshape_wide = data.matrix(df_microgliaReshape_wide[,2:5])
 swept = sweep(df_microgliaReshape_wide,1,rowSums(df_microgliaReshape_wide),`/`)
+
+# only Arf1_KO and WT samples
+df_microgliaReshape_wide2 = data.matrix(df_microgliaReshape_wide[,c(2,4)])
+swept2 = sweep(df_microgliaReshape_wide2,1,rowSums(df_microgliaReshape_wide2),`/`)
+
+
 swept = data.frame(swept)
 swept$cluster = as.numeric(rownames(swept))
 write.table(swept, "results/umaps/Number_of_microglia_in_each_cluster_by_sample.fraction.txt", quote = F, sep = "\t", row.names = F, )
@@ -1153,16 +1159,33 @@ abc = c(0,0,0.09,0.28,0.54)
 myComplexHeatmap = function(mat, width){
   col_fun = colorRamp2(c(0, 5), c("white", "blue"))
   #column_ha = HeatmapAnnotation(up = vec, ratio = anno_barplot(vec), col = list(foo = col_fun))
+  
+  vec2 = rowMeans(mat)
+  
+  column_ha = HeatmapAnnotation(sample = anno_barplot(swept2[1:5,], gp = gpar(fill = c(2,5)),
+                                          bar_width = 1, height = unit(1, "cm")))
+  
+  row_ha = rowAnnotation(expression = anno_barplot(log10(vec2*100)))
+  
+  lgd = Legend(labels = colnames(swept2[1:5,]), title = "sample",
+    legend_gp = gpar(fill = c(2,5)))
+  
   plot=
         ComplexHeatmap::Heatmap(matrix = t(scale(t(mat))), name="Z-score", km=1, 
-                        col=colorRampPalette(rev(brewer.pal(n = 7, name ="RdYlBu")))(100), row_names_gp = gpar(fontsize = 9, fontface = "bold"),
+                        col=colorRampPalette(c("darkblue","grey","darkred"))(256), 
+                        row_names_gp = gpar(fontsize = 9, fontface = "bold"),
                         column_names_gp = gpar(fontsize = 12, fontface = "bold"),
-                        cluster_columns = T, column_title = "cluster", column_title_gp = gpar(fontsize = 15, fontface = "bold"), 
-                        column_title_side = "bottom", column_names_rot = 0, width = width) # top_annotation = column_ha
+                        cluster_columns = T, column_title = "cluster", 
+                        column_title_gp = gpar(fontsize = 15, fontface = "bold"), 
+                        column_title_side = "bottom", column_names_rot = 0, width = width,
+                        top_annotation = column_ha,right_annotation = row_ha) # top_annotation = column_ha
+  
+  plot.heat = draw(plot, heatmap_legend_side = "left", annotation_legend_side = "left",heatmap_legend_list = list(lgd))
+  
   pdf(file = paste0("results/heatmaps/", deparse(substitute(mat)), ".pdf"))
-  print(plot)
+  print(plot.heat)
   dev.off()
-  print(plot)
+  print(plot.heat)
 }
 
 myComplexHeatmap(mat = ALS_DAM_down.regulated.genes_5Clusters, width = unit(5, "cm"))
